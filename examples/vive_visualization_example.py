@@ -1,5 +1,18 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python
+
+# Copyright 2025 The Xense Robotics Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 Vive Tracker module - get device pose data and visualize it in real time using Pygame
@@ -7,12 +20,16 @@ This example is to help users better observe if the device positioning has drift
 """
 
 import sys  # noqa: F401
+from pathlib import Path  # noqa: F401
+
 import time
-import os  # noqa: F401
 import logging
+import argparse
 import numpy as np
 import pygame
-import math  # noqa: F401
+
+from xensesdk.ezgl.utils.QtTools import qtcv  # noqa: F401
+from xesne_gripper import FlareGrip
 
 # configure logging
 logging.basicConfig(
@@ -83,8 +100,8 @@ class PygameVisualizer:
     def draw_coordinate_frame(self, position, quaternion, color, length, name=""):
         """
         draw a coordinate frame
-        :param position: 坐标系原点 [x, y, z]
-        :param quaternion: 坐标系姿态 [x, y, z, w]
+        :param position: coordinate frame origin [x, y, z]
+        :param quaternion: coordinate frame orientation [x, y, z, w]
         :param color: axis color (R, G, B)
         :param length: axis length
         :param name: coordinate frame name, for display
@@ -173,7 +190,10 @@ class PygameVisualizer:
 
         # show pose information
         info_text = f"Position: ({tracker_position[0]:.4f}, {tracker_position[1]:.4f}, {tracker_position[2]:.4f}) (m)"
-        quat_text = f"Rotation (x, y, z, w): ({tracker_rotation[0]:.4f}, {tracker_rotation[1]:.4f}, {tracker_rotation[2]:.4f}, {tracker_rotation[3]:.4f})"
+        quat_text = (
+            f"Rotation (x, y, z, w): ({tracker_rotation[0]:.4f}, {tracker_rotation[1]:.4f}, "
+            f"{tracker_rotation[2]:.4f}, {tracker_rotation[3]:.4f})"
+        )
         zoom_text = f"Zoom/Scale: {self.scale_factor/200.0:.2f}x (W/S or Up/Down)"
 
         text_surface = self.font.render(info_text, True, (255, 255, 255))
@@ -192,82 +212,120 @@ class PygameVisualizer:
         return self.running
 
 
-# --- Vive Tracker logic ---
-try:
-    from pika.sense import Sense
+def run_visualization(mac_addr: str, target_device: str = None):
+    """Run Vive Tracker visualization using FlareGrip"""
+    viz = PygameVisualizer()
+    if not viz.is_running():
+        logger.error("Pygame visualization environment not ready, exiting.")
+        return False
 
-    def run_visualization():
-        """test getting pose data of WM0 device and visualize it"""
-        viz = PygameVisualizer()
-        if not viz.is_running():
-            logger.error("Pygame visualization environment not ready, exiting.")
-            return False
+    logger.info(f"Initializing FlareGrip (MAC: {mac_addr})...")
+    flare = FlareGrip(
+        mac_addr=mac_addr,
+        log_level=logging.INFO,
+        no_gripper=True,
+        no_sensor=True,
+        no_cam=True,
+    )
 
-        sense = Sense()
-        logger.info("connecting Sense device...")
-        if not sense.connect():
-            logger.error("connecting Sense device failed")
+    try:
+        tracker = flare.get_vive_tracker()
+        if not tracker:
+            logger.error("Failed to get Vive Tracker object, please ensure pysurvive is installed")
             pygame.quit()
             return False
 
-        try:
-            tracker = sense.get_vive_tracker()
-            if not tracker:
-                logger.error("getting Vive Tracker object failed, please ensure pysurvive library is installed")
-                pygame.quit()
-                return False
+        logger.info("Waiting for device initialization to complete...")
+        time.sleep(2.0)
 
-            logger.info("waiting for device initialization to complete...")
-            time.sleep(2.0)
+        # Get available devices and filter trackers
+        all_devices = tracker.get_devices()
+        trackers = [d for d in all_devices if not d.startswith("LH")]
+        logger.info(f"Detected devices: {all_devices}")
+        logger.info(f"Available trackers: {trackers}")
 
-            target_device = "WM0"
-            max_retries = 10
-            retry_count = 0
-            # device connection check logic...
-            for retry_count in range(max_retries):
-                devices = sense.get_tracker_devices()
-                if target_device in devices:
-                    logger.info(f"successfully detected {target_device} device!")
-                    break
+        # Determine target device
+        if target_device:
+            if target_device not in trackers:
+                logger.warning(f"Specified device {target_device} not found in {trackers}")
+                if trackers:
+                    target_device = trackers[0]
+                    logger.info(f"Using first available tracker: {target_device}")
                 else:
-                    logger.info(
-                        f"not detected {target_device} device, waiting and retrying ({retry_count+1}/{max_retries})..."
-                    )
-                time.sleep(1.0)
+                    logger.error("No trackers available")
+                    pygame.quit()
+                    return False
+        else:
+            if trackers:
+                target_device = trackers[0]
+                logger.info(f"Using first available tracker: {target_device}")
             else:
-                logger.warning(f"after multiple attempts, still not detected {target_device} device")
-                pygame.quit()
-                return False
-
-            logger.info(
-                f"start getting pose data of {target_device} device and updating visualization (W/S or Up/Down keys to control zoom, press X to close window)..."
-            )
-
-            # loop to get data and update visualization
-            while viz.is_running():
-                pose = sense.get_pose(target_device)
-
-                if pose:
-                    position = pose.position  # [x, y, z]
-                    rotation = pose.rotation  # [x, y, z， w] quaternion
-                    viz.update(position, rotation)
+                # Wait and retry for tracker detection
+                max_retries = 10
+                for retry_count in range(max_retries):
+                    all_devices = tracker.get_devices()
+                    trackers = [d for d in all_devices if not d.startswith("LH")]
+                    if trackers:
+                        target_device = trackers[0]
+                        logger.info(f"Detected tracker: {target_device}")
+                        break
+                    else:
+                        logger.info(
+                            f"No tracker detected, waiting and retrying ({retry_count+1}/{max_retries})..."
+                        )
+                    time.sleep(1.0)
                 else:
-                    logger.warning(f"cannot get pose data of {target_device}...")
-                    # at least call update once to handle user input events
-                    viz.update([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+                    logger.error("After multiple attempts, still no tracker detected")
+                    pygame.quit()
+                    return False
 
-                time.sleep(0.01)
+        logger.info(
+            f"Starting pose visualization for {target_device} "
+            "(W/S or Up/Down keys to zoom, close window to exit)..."
+        )
 
-        except Exception as e:
-            logger.error(f"error occurred during getting pose data: {e}")
-        finally:
-            logger.info("disconnecting Vive Tracker device...")
-            sense.disconnect()
-            pygame.quit()
+        # Loop to get data and update visualization
+        while viz.is_running():
+            pose = tracker.get_pose(target_device)
 
-    if __name__ == "__main__":
-        run_visualization()
+            if pose:
+                position = pose.position  # [x, y, z]
+                rotation = pose.rotation  # [x, y, z, w] quaternion
+                viz.update(position, rotation)
+            else:
+                # No pose data, update with default values
+                viz.update([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
 
-except ImportError as e:
-    logger.error(f"import error occurred: {e}")
-    logger.error("missing dependencies, ensure pysurvive library, pika.sense library and pygame library are installed")
+            time.sleep(0.01)
+
+    except Exception as e:
+        logger.error(f"Error occurred during pose visualization: {e}")
+    finally:
+        logger.info("Closing FlareGrip...")
+        flare.close()
+        pygame.quit()
+
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Vive Tracker Visualization")
+    parser.add_argument(
+        "--mac",
+        type=str,
+        default="6ebbc5f53240",
+        help="MAC address of the FlareGrip device",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Target Vive Tracker device name (e.g., WM0, T20)",
+    )
+    args = parser.parse_args()
+
+    run_visualization(args.mac, args.device)
+
+
+if __name__ == "__main__":
+    main()

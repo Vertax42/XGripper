@@ -1,5 +1,7 @@
 pyproject.toml
+examples/flare_grip_example.py
 examples/vive_visualization_example.py
+utils/__init__.py
 utils/general.py
 vive_tracker/__init__.py
 vive_tracker/pose_utils.py

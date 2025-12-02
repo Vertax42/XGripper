@@ -13,9 +13,5 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""XGripper SDK."""
 
-from .xense_gripper import FlareGrip
-
-__version__ = "0.0.1"
-__all__ = ["FlareGrip"]
+from .general import Logger, Timer, DataBuffer  # noqa: F401
