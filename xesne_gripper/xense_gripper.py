@@ -13,9 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging
+
 from typing import Union
 import time
+
+import spdlog
 
 from xensesdk import call_service, Sensor
 from xensegripper import XenseGripper, XenseCamera
@@ -29,15 +31,32 @@ class FlareGrip:
         self,
         mac_addr: str,
         cam_size=(640, 480),
-        log_level=logging.INFO,
+        log_level: str = "INFO",
         no_gripper=False,
         no_sensor=False,
         no_vive=False,
         no_cam=False,
     ):
         self.mac_addr = mac_addr
-        self.logger = logging.getLogger(f"Flare-{self.mac_addr[:6]}")
-        self.logger.setLevel(log_level)
+
+        # Create spdlog logger for this instance
+        logger_name = f"Flare-{self.mac_addr[:6]}"
+        self.logger = spdlog.ConsoleLogger(logger_name, multithreaded=True, stdout=True, colored=True)
+        self.logger.set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%n] %v")
+
+        # Set log level
+        level_map = {
+            "DEBUG": spdlog.LogLevel.DEBUG,
+            "INFO": spdlog.LogLevel.INFO,
+            "WARN": spdlog.LogLevel.WARN,
+            "WARNING": spdlog.LogLevel.WARN,
+            "ERROR": spdlog.LogLevel.ERR,
+            "CRITICAL": spdlog.LogLevel.CRITICAL,
+        }
+        if isinstance(log_level, str):
+            self.logger.set_level(level_map.get(log_level.upper(), spdlog.LogLevel.INFO))
+        else:
+            self.logger.set_level(spdlog.LogLevel.INFO)
 
         # camera
         self._fg_cam: XenseCamera = None
@@ -57,7 +76,7 @@ class FlareGrip:
         if not no_sensor:
             sensor_sns = call_service(f"master_{self.mac_addr}", "scan_sensor_sn")
             if sensor_sns is None:
-                self.logger.warning("Failed to find sensors")
+                self.logger.warn("Failed to find sensors")
             else:
                 for sn in sensor_sns.keys():
                     self._fg_sensors[sn] = Sensor.create(sn, mac_addr=self.mac_addr)
@@ -66,7 +85,7 @@ class FlareGrip:
         if not no_cam:
             camera_id = call_service(f"master_{self.mac_addr}", "list_camera")
             if camera_id is None:
-                self.logger.warning("Failed to find camera")
+                self.logger.warn("Failed to find camera")
             else:
                 self._fg_cam = XenseCamera(
                     next(iter(camera_id.values())),
@@ -87,22 +106,28 @@ class FlareGrip:
             )
             self.logger.info("Waiting for Vive Tracker to be detected...")
             if not self._fg_vive.connect():
-                self.logger.warning("Failed to connect to Vive Tracker")
+                self.logger.warn("Failed to connect to Vive Tracker")
                 self._fg_vive = None
             else:
-                # Give more time for device detection
-
-                time.sleep(1.0)
-                # Filter out lighthouses (LH0, LH1, etc.) and only keep trackers
-                all_devices = self._fg_vive.get_devices()
-                trackers = [d for d in all_devices if not d.startswith("LH")]
-                self.logger.info(f"Detected devices: {all_devices}, Trackers: {trackers}")
+                # Use wait_for_devices() method which monitors devices_info
+                # populated by _pose_collector thread via NextUpdated()
+                self.logger.info("Waiting for Vive devices (this may take a few seconds)...")
+                devices = self._fg_vive.wait_for_devices(timeout=10.0, required_trackers=1)
+                
+                lighthouses = devices["lighthouses"]
+                trackers = devices["trackers"]
+                
+                self.logger.info(f"Detected: lighthouses={lighthouses}, trackers={trackers}")
 
                 if len(trackers) == 0:
-                    self.logger.warning(
-                        f"No Vive Tracker found yet (detected devices: {all_devices}), "
-                        "will try to detect during runtime"
+                    self.logger.warn(
+                        f"No Vive Tracker found (lighthouses: {lighthouses}). "
+                        "Check if tracker is paired with dongle and in lighthouse view."
                     )
+                else:
+                    self.logger.info(f"Found {len(trackers)} tracker(s): {trackers}")
+                    # Log reference coordinate system information
+                    self._fg_vive.log_reference_frame_info()
 
     def sensor(self, id: Union[int, str]) -> Sensor | None:
         if isinstance(id, int):
@@ -124,7 +149,7 @@ class FlareGrip:
         if self._fg_gripper is not None:
             self._fg_gripper.register_button_callback(event_type, callback)
         else:
-            self.logger.warning(
+            self.logger.warn(
                 "No gripper initialized, cannot register button callback"
             )
 
@@ -132,18 +157,18 @@ class FlareGrip:
         if self._fg_gripper is not None:
             self._fg_gripper.calibrate()
         else:
-            self.logger.warning("No gripper initialized, cannot calibrate")
+            self.logger.warn("No gripper initialized, cannot calibrate")
 
     # endregion: gripper methods
 
     def set_vive_tracker_config(self, config_path=None, lh_config=None, args=None):
         """
-        set Vive Tracker configuration
+        Set Vive Tracker configuration.
 
         Args:
-            config_path (str, optional): configuration file path
-            lh_config (str, optional): lighthouse configuration
-            args (list, optional): other pysurvive parameters
+            config_path (str, optional): Configuration file path
+            lh_config (str, optional): Lighthouse configuration
+            args (list, optional): Other pysurvive parameters
         """
         self._vive_tracker_config = config_path
         self._vive_tracker_lh = lh_config
@@ -151,7 +176,7 @@ class FlareGrip:
 
     def get_vive_tracker(self):
         """
-        get Vive Tracker object
+        Get Vive Tracker object.
 
         Returns:
             ViveTracker: Vive Tracker object
@@ -165,27 +190,27 @@ class FlareGrip:
                 )
                 self._fg_vive.connect()
             except Exception as e:
-                self.logger.error(f"failed to initialize Vive Tracker: {e}")
+                self.logger.error(f"Failed to initialize Vive Tracker: {e}")
                 return None
 
         return self._fg_vive
 
     def get_pose(self, device_name=None):
         """
-        get pose data of Vive Tracker
+        Get pose data of Vive Tracker.
 
         Args:
-            device_name (str, optional): device name, if None, return pose data for all devices
+            device_name (str, optional): Device name, if None, return pose data for all devices
 
         Returns:
-            PoseData or dict: if device_name is specified, return the PoseData object for the device;
+            PoseData or dict: If device_name is specified, return the PoseData object for the device;
             otherwise return a dictionary containing pose data for all devices {device_name: PoseData}
         """
         tracker = self.get_vive_tracker()
         if tracker:
             return tracker.get_pose(device_name)
         else:
-            self.logger.warning("No vive tracker initialized, cannot get pose data")
+            self.logger.warn("No vive tracker initialized, cannot get pose data")
             return None if device_name else {}
 
     def recv_data(self, ee_pose=True, gripper=True, wrist_img=True):
@@ -201,21 +226,22 @@ class FlareGrip:
         if wrist_img:
             if self._fg_cam is not None:
                 data["wrist_img"] = self._fg_cam.read()[1]
-            # else:
-            #     self.logger.warning("No camera initialized")
 
         # get gripper data
         if gripper and self._fg_gripper is not None:
             gripper_status = self._fg_gripper.get_gripper_status()
-            data["gripper_position"] = gripper_status["position"]
-            data["gripper_velocity"] = gripper_status["velocity"]
-            data["gripper_force"] = gripper_status["force"]
+            if gripper_status is not None:
+                data["gripper_position"] = gripper_status.get("position")
+                data["gripper_velocity"] = gripper_status.get("velocity")
+                data["gripper_force"] = gripper_status.get("force")
+            else:
+                self.logger.debug("Gripper status not available")
 
         if ee_pose:
             if self._fg_vive is not None:
                 data["ee_pose"] = self._fg_vive.get_pose()
             else:
-                self.logger.warning("No vive tracker initialized")
+                self.logger.warn("No vive tracker initialized")
 
         return data
 
@@ -224,7 +250,7 @@ class FlareGrip:
             try:
                 sensor.release()
             except Exception as e:
-                self.logger.error(f"failed to release sensor: {e}")
+                self.logger.error(f"Failed to release sensor: {e}")
         if self._fg_cam is not None:
             try:
                 # Try different methods to release camera
@@ -235,12 +261,12 @@ class FlareGrip:
                 elif hasattr(self._fg_cam, 'close'):
                     self._fg_cam.close()
             except Exception as e:
-                self.logger.error(f"failed to release camera: {e}")
+                self.logger.error(f"Failed to release camera: {e}")
         if self._fg_vive is not None:
             try:
                 self._fg_vive.disconnect()
             except Exception as e:
-                self.logger.error(f"failed to disconnect vive tracker: {e}")
+                self.logger.error(f"Failed to disconnect vive tracker: {e}")
         self.logger.info("XenseGripper closed.")
 
 
