@@ -19,7 +19,13 @@ Vive Tracker Calibration Script
 This script forces recalibration of the Vive Tracker system using pysurvive.
 
 Usage:
-    python calibrate_vive.py [--timeout 60]
+    python calibrate_vive.py [--timeout 60] [--origin tracker|lh0]
+
+Origin Modes:
+    tracker: (Default) The coordinate origin is at the Tracker's position during calibration.
+             LH0 will be placed on the +Y axis. Good for robot-centric applications.
+    lh0:     The coordinate origin is at Lighthouse 0 (LH0) position.
+             LH0 looks in the +X direction. Good for fixed room-centric applications.
 
 Instructions:
     1. Make sure all Lighthouse base stations are powered on and visible
@@ -66,12 +72,15 @@ def print_banner():
     print()
 
 
-def calibrate_vive(timeout=60):
+def calibrate_vive(timeout=60, origin="tracker"):
     """
     Force recalibration of the Vive Tracker system.
 
     Args:
         timeout: Maximum time to wait for calibration (seconds)
+        origin: Origin mode - "tracker" (default) or "lh0"
+                - "tracker": Origin at Tracker position, LH0 on +Y axis
+                - "lh0": Origin at LH0 position, LH0 looks in +X direction
     """
     global running
     
@@ -79,6 +88,13 @@ def calibrate_vive(timeout=60):
     signal.signal(signal.SIGINT, signal_handler)
     
     print_banner()
+
+    # Display origin mode
+    if origin == "lh0":
+        logger.info("Origin Mode: LH0 (Lighthouse 0 at origin, looking +X)")
+    else:
+        logger.info("Origin Mode: Tracker (Tracker at origin, LH0 on +Y axis)")
+    print()
 
     logger.info("Starting forced calibration...")
     logger.info("Please ensure:")
@@ -90,6 +106,10 @@ def calibrate_vive(timeout=60):
     # Build arguments with force-calibrate flag
     args = sys.argv[:1]  # Keep program name
     args.extend(["--force-calibrate"])
+    
+    # Add center-on-lh0 flag if origin is lh0
+    if origin == "lh0":
+        args.extend(["--center-on-lh0"])
 
     # Initialize pysurvive context with calibration flag
     logger.info("Initializing pysurvive with --force-calibrate...")
@@ -207,6 +227,7 @@ def calibrate_vive(timeout=60):
     print("         Calibration Summary")
     print("=" * 60)
     print(f"Duration: {time.time() - start_time:.1f} seconds")
+    print(f"Origin Mode: {'LH0 (Lighthouse at origin)' if origin == 'lh0' else 'Tracker (Tracker at origin)'}")
     print(f"Lighthouses: {lighthouses}")
     print(f"Trackers: {trackers}")
     print()
@@ -246,9 +267,21 @@ def main():
         description="Vive Tracker Calibration Tool - Calibrates all detected trackers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Origin Modes:
+    tracker  - Origin at Tracker position during calibration (default)
+               LH0 will be placed on the +Y axis
+               Good for robot-centric applications
+               
+    lh0      - Origin at Lighthouse 0 (LH0) position
+               LH0 looks in the +X direction  
+               Good for fixed room-centric applications
+
 Examples:
-    python calibrate_vive.py                  # Default 60 second calibration
-    python calibrate_vive.py --timeout 120    # 2 minute calibration
+    python calibrate_vive.py                        # Default: tracker as origin
+    python calibrate_vive.py --origin lh0           # LH0 as origin
+    python calibrate_vive.py --origin tracker       # Tracker as origin (explicit)
+    python calibrate_vive.py --timeout 120          # 2 minute calibration
+    python calibrate_vive.py --origin lh0 --timeout 120
         """
     )
     parser.add_argument(
@@ -257,9 +290,16 @@ Examples:
         default=60,
         help="Calibration timeout in seconds (default: 60)"
     )
+    parser.add_argument(
+        "--origin",
+        type=str,
+        choices=["tracker", "lh0"],
+        default="tracker",
+        help="Coordinate origin mode: 'tracker' (origin at Tracker) or 'lh0' (origin at Lighthouse 0). Default: tracker"
+    )
 
     args = parser.parse_args()
-    calibrate_vive(args.timeout)
+    calibrate_vive(args.timeout, args.origin)
 
 
 if __name__ == "__main__":

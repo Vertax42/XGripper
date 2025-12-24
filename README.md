@@ -37,9 +37,12 @@ pip install -e .
    - LED colors: 🟢 Green = tracking, 🔵 Blue = pairing mode, 🔴 Red = error
 
 3. **Reference Coordinate System**
-   - Origin: LH0 (first detected lighthouse)
-   - All poses are relative to LH0
+   - Default origin: Tracker position during calibration
+   - Optional: Use `--center-on-lh0` to set LH0 as origin
+   - All poses are relative to the origin
    - Coordinate system: Right-handed
+   - Z-axis: Aligned with gravity (up)
+   - Rotation reference: Based on LH0 orientation
 
 ## Example Scripts
 
@@ -87,20 +90,34 @@ python examples/vive_print_example.py --rate 5
 
 #### `calibrate_vive.py` - Force Recalibration
 
-Force recalibration of the Vive tracking system.
+Force recalibration of the Vive tracking system with configurable origin mode.
 
 ```bash
-# Default 60 second calibration
+# Default: Tracker as origin, 60 second calibration
 python examples/calibrate_vive.py
 
-# Extended calibration (2 minutes)
-python examples/calibrate_vive.py --timeout 120
+# LH0 as origin (recommended for fixed setups)
+python examples/calibrate_vive.py --origin lh0
+
+# Tracker as origin (explicit)
+python examples/calibrate_vive.py --origin tracker
+
+# Extended calibration with LH0 origin
+python examples/calibrate_vive.py --origin lh0 --timeout 120
 ```
+
+**Origin Modes:**
+
+| Mode | Origin | Coordinate System | Use Case |
+|------|--------|------------------|----------|
+| `--origin tracker` | Tracker position during calibration | LH0 on +Y axis | Robot-centric applications |
+| `--origin lh0` | Lighthouse 0 (LH0) position | LH0 looks in +X direction | Fixed room/scene applications |
 
 **Instructions:**
 1. Ensure all base stations are powered on (green LED)
 2. Place tracker(s) with clear line of sight to lighthouses
 3. Keep tracker(s) stationary during calibration
+4. Choose origin mode based on your application needs
 
 #### `raw_survive.py` - Raw pysurvive Access
 
@@ -160,6 +177,56 @@ python examples/rerun_visualization_example.py --mac YOUR_MAC_ADDRESS
 #   --no-camera   Disable camera
 #   --no-vive     Disable Vive tracking
 #   --hz          Update rate (default: 30)
+```
+
+## Calibration Details
+
+### Understanding the Config File
+
+After calibration, the configuration is saved to `~/.config/libsurvive/config.json`.
+
+**Example with `--origin lh0`:**
+```json
+"lighthouse0": {
+    "pose": ["0.000000", "0.000000", "0.000000", ...],  // LH0 at origin (0,0,0)
+}
+"lighthouse1": {
+    "pose": ["-0.200", "-3.260", "-0.126", ...],  // LH1 relative to LH0
+}
+```
+
+**Example with `--origin tracker` (default):**
+```json
+"lighthouse0": {
+    "pose": ["0.000000", "1.406", "0.683", ...],  // LH0 relative to tracker
+}
+"lighthouse1": {
+    "pose": ["0.103", "-1.854", "0.567", ...],  // LH1 relative to tracker
+}
+```
+
+### Coordinate System Visualization
+
+```
+With --origin lh0:
+
+        +Z (up)
+        ↑
+        |     LH0 ●────→ +X (LH0 looking direction)
+        |      (0,0,0)
+        |
+        └──────────────→ +Y
+
+With --origin tracker (default):
+
+        +Z (up)
+        ↑
+        |         ● LH0 (+Y direction)
+        |         |
+        |    Tracker ● (0,0,0)
+        |         |
+        |         ● LH1 (-Y direction)
+        └──────────────→ +X
 ```
 
 ## Troubleshooting
