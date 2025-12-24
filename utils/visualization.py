@@ -60,18 +60,37 @@ def init_rerun(
     session_name: str = "xgripper_visualization",
     spawn: bool = True,
     memory_limit: str | None = None,
+    save_path: str | None = None,
 ) -> bool:
     """
     Initialize the Rerun SDK for visualizing XGripper data.
 
+    Supports two workflows:
+    - Synchronous: spawn=True starts the Native Viewer for real-time visualization
+    - Asynchronous: save_path saves data to .rrd file for later viewing
+
+    Both can be used together (real-time viewing + recording to file).
+
     Args:
         session_name: Name of the Rerun session/recording.
-        spawn: Whether to spawn the Rerun viewer automatically.
+        spawn: Whether to spawn the Rerun viewer automatically (synchronous workflow).
         memory_limit: Memory limit for Rerun (e.g., "10%", "2GB").
-            If None, uses LEROBOT_RERUN_MEMORY_LIMIT env var or "10%".
+            If None, uses XGRIPPER_RERUN_MEMORY_LIMIT env var or "10%".
+        save_path: Path to save the recording (.rrd file). If provided, enables
+            asynchronous workflow. Can be used with or without spawn.
 
     Returns:
         bool: True if initialization was successful, False otherwise.
+
+    Examples:
+        # Real-time visualization only
+        init_rerun(spawn=True)
+
+        # Save to file only (no viewer, lowest resource usage)
+        init_rerun(spawn=False, save_path="/tmp/recording.rrd")
+
+        # Both: real-time + save to file
+        init_rerun(spawn=True, save_path="/tmp/recording.rrd")
     """
     if not check_rerun_available():
         return False
@@ -83,6 +102,12 @@ def init_rerun(
 
         rr.init(session_name)
 
+        # Asynchronous workflow: save to file
+        if save_path:
+            rr.save(save_path)
+            logger.info(f"Recording will be saved to: {save_path}")
+
+        # Synchronous workflow: spawn viewer
         if spawn:
             if memory_limit is None:
                 memory_limit = os.getenv("XGRIPPER_RERUN_MEMORY_LIMIT", "10%")
@@ -119,7 +144,11 @@ def log_camera_image(
     path = entity_path or f"{CAMERA_PREFIX}/{camera_name}"
 
     # Handle CHW -> HWC conversion if needed
-    if image.ndim == 3 and image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4):
+    if (
+        image.ndim == 3
+        and image.shape[0] in (1, 3, 4)
+        and image.shape[-1] not in (1, 3, 4)
+    ):
         image = np.transpose(image, (1, 2, 0))
 
     rr.log(path, rr.Image(image))
@@ -254,7 +283,9 @@ class TrajectoryVisualizer:
 
         # Keep only the last max_points
         if len(self.trajectories[device_name]) > self.max_points:
-            self.trajectories[device_name] = self.trajectories[device_name][-self.max_points:]
+            self.trajectories[device_name] = self.trajectories[device_name][
+                -self.max_points :
+            ]
 
         # Log trajectory as line strip
         path = entity_path or f"{TRACKER_PREFIX}/{device_name}/trajectory"
@@ -311,21 +342,39 @@ class XGripperVisualizer:
         self.trajectory_viz = TrajectoryVisualizer(max_points=max_trajectory_points)
         self.initialized = False
 
-    def init(self, spawn: bool = True, memory_limit: str | None = None) -> bool:
+    def init(
+        self,
+        spawn: bool = True,
+        memory_limit: str | None = None,
+        save_path: str | None = None,
+    ) -> bool:
         """
         Initialize Rerun visualization.
 
         Args:
-            spawn: Whether to spawn the Rerun viewer.
+            spawn: Whether to spawn the Rerun viewer (synchronous workflow).
             memory_limit: Memory limit for Rerun.
+            save_path: Path to save the recording (.rrd file). If provided,
+                enables asynchronous workflow.
 
         Returns:
             bool: True if initialization was successful.
+
+        Examples:
+            # Real-time visualization
+            viz.init(spawn=True)
+
+            # Save only (no viewer)
+            viz.init(spawn=False, save_path="/tmp/session.rrd")
+
+            # Both
+            viz.init(spawn=True, save_path="/tmp/session.rrd")
         """
         self.initialized = init_rerun(
             session_name=self.session_name,
             spawn=spawn,
             memory_limit=memory_limit,
+            save_path=save_path,
         )
         return self.initialized
 
@@ -481,4 +530,6 @@ def log_xgripper_data(
                 rotation = pose_data.get("rotation")
 
             if position is not None and rotation is not None:
-                log_vive_pose(device_name=device_name, position=position, rotation=rotation)
+                log_vive_pose(
+                    device_name=device_name, position=position, rotation=rotation
+                )
