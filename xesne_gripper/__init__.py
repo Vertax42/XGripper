@@ -15,7 +15,7 @@
 # limitations under the License.
 """XGripper SDK."""
 
-from .xense_gripper import FlareGrip
+from .xense_gripper import FlareGrip, scan_sensors, list_sensors
 
 __version__ = "0.0.1"
-__all__ = ["FlareGrip"]
+__all__ = ["FlareGrip", "scan_sensors", "list_sensors"]

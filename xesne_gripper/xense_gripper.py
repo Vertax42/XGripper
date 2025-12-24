@@ -24,6 +24,70 @@ from xensegripper import XenseGripper, XenseCamera
 
 from vive_tracker import ViveTracker
 
+# Module-level logger for standalone functions
+_module_logger = None
+
+
+def _get_module_logger():
+    """Get or create module-level logger."""
+    global _module_logger
+    if _module_logger is None:
+        _module_logger = spdlog.ConsoleLogger("xense_gripper", multithreaded=True, stdout=True, colored=True)
+        _module_logger.set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%n] %v")
+        _module_logger.set_level(spdlog.LogLevel.INFO)
+    return _module_logger
+
+
+def scan_sensors(mac_addr: str, verbose: bool = True) -> dict | None:
+    """
+    Scan for available Xense sensors.
+    
+    Args:
+        mac_addr: MAC address of the FlareGrip device
+        verbose: If True, print sensor information
+        
+    Returns:
+        dict: Dictionary of sensor serial numbers and their info, or None if failed
+    """
+    logger = _get_module_logger()
+    
+    if verbose:
+        logger.info(f"Scanning for sensors on device {mac_addr}...")
+    
+    try:
+        sensor_sns = call_service(f"master_{mac_addr}", "scan_sensor_sn")
+        
+        if sensor_sns is None:
+            if verbose:
+                logger.warn("No sensors found or service unavailable")
+            return None
+        
+        if verbose:
+            logger.info(f"Found {len(sensor_sns)} sensor(s):")
+            for sn, info in sensor_sns.items():
+                logger.info(f"  - {sn}: {info}")
+        
+        return sensor_sns
+        
+    except Exception as e:
+        if verbose:
+            logger.error(f"Error scanning sensors: {e}")
+        return None
+
+
+def list_sensors(mac_addr: str) -> list:
+    """
+    Get list of available sensor serial numbers.
+    
+    Args:
+        mac_addr: MAC address of the FlareGrip device
+        
+    Returns:
+        list: List of sensor serial numbers
+    """
+    sensors = scan_sensors(mac_addr, verbose=False)
+    return list(sensors.keys()) if sensors else []
+
 
 class FlareGrip:
 
@@ -72,14 +136,31 @@ class FlareGrip:
 
         self.logger.info("Initializing FlareGrip...")
 
-        # find all sensors
+        # Scan and print available sensors first
+        self.logger.info("=" * 50)
+        self.logger.info("Scanning available sensors...")
+        available_sensors = scan_sensors(self.mac_addr, verbose=False)
+        if available_sensors:
+            self.logger.info(f"Available sensors ({len(available_sensors)}):")
+            for sn, info in available_sensors.items():
+                self.logger.info(f"  - SN: {sn}, Info: {info}")
+        else:
+            self.logger.warn("No sensors detected on this device")
+        self.logger.info("=" * 50)
+
+        # Initialize sensors
         if not no_sensor:
-            sensor_sns = call_service(f"master_{self.mac_addr}", "scan_sensor_sn")
-            if sensor_sns is None:
-                self.logger.warn("Failed to find sensors")
+            if available_sensors:
+                self.logger.info(f"Initializing {len(available_sensors)} sensor(s)...")
+                for sn in available_sensors.keys():
+                    self.logger.info(f"  Initializing sensor: {sn}")
+                    try:
+                        self._fg_sensors[sn] = Sensor.create(sn, mac_addr=self.mac_addr)
+                        self.logger.info(f"  Sensor {sn} initialized successfully")
+                    except Exception as e:
+                        self.logger.error(f"  Failed to initialize sensor {sn}: {e}")
             else:
-                for sn in sensor_sns.keys():
-                    self._fg_sensors[sn] = Sensor.create(sn, mac_addr=self.mac_addr)
+                self.logger.warn("No sensors to initialize")
 
         # init camera
         if not no_cam:
@@ -238,10 +319,7 @@ class FlareGrip:
                 self.logger.debug("Gripper status not available")
 
         if ee_pose:
-            if self._fg_vive is not None:
-                data["ee_pose"] = self._fg_vive.get_pose()
-            else:
-                self.logger.warn("No vive tracker initialized")
+            data["ee_pose"] = self.get_pose()
 
         return data
 
