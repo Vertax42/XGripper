@@ -13,17 +13,17 @@ license = "Apache-2.0"
 authors = [
   { name = "Jin Liu", email = "liujin@xenserobotics.com" },
   { name = "Hongzhan Yu", email = "yuhongzhan@xenserobotics.com" },
-  { name = "Xincheng Yang", email = "yangxincheng@xenserobotics.com" }
+  { name = "Xincheng Yang", email = "yangxincheng@xenserobotics.com" },
 ]
 
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Education",
-    "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3.10",
-    "Topic :: Software Development :: Build Tools",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Education",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 keywords = ["xense robotics", "gripper", "data collection"]
@@ -34,19 +34,21 @@ dependencies = [
   "pysurvive",
   "draccus",
   "pygame",
+  "rerun-sdk",
+  "spdlog",
 ]
 
 # [project.scripts]
 [tool.setuptools]
-include-package-data = true  # 打开包含包内非 .py 文件
+include-package-data = true # include non .py files
 
 [tool.setuptools.packages.find]
 where = ["."]
 
-# 打包数据文件（等价于你的 package_data）
+# package data
 # [tool.setuptools.package-data]
 # xgripper = ["assets/**"]
 
-# 如果还需要把非 .py 的资源一起打包，可用：
+# include non .py files
 # [tool.setuptools.include-package-data]
 # include-package-data = true
