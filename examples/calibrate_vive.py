@@ -23,8 +23,8 @@ Usage:
 
 Instructions:
     1. Make sure all Lighthouse base stations are powered on and visible
-    2. Place the tracker in a stable position with clear line of sight to all lighthouses
-    3. Keep the tracker stationary during calibration
+    2. Place the tracker(s) in a stable position with clear line of sight to all lighthouses
+    3. Keep the tracker(s) stationary during calibration
     4. Wait for calibration to complete
 """
 
@@ -32,6 +32,31 @@ import pysurvive
 import sys
 import time
 import argparse
+import signal
+
+from utils.spdlogger import get_logger
+
+logger = get_logger("calibrate_vive")
+
+# Global flag for graceful shutdown
+running = True
+
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C for graceful shutdown"""
+    global running
+    logger.info("Received Ctrl+C, stopping calibration...")
+    running = False
+
+
+def is_tracker_device(name: str) -> bool:
+    """Check if a device name is a tracker (WM, T2, HMD)"""
+    return name.startswith("WM") or name.startswith("T2") or name.startswith("HMD")
+
+
+def is_lighthouse_device(name: str) -> bool:
+    """Check if a device name is a lighthouse"""
+    return name.startswith("LH")
 
 
 def print_banner():
@@ -48,13 +73,18 @@ def calibrate_vive(timeout=60):
     Args:
         timeout: Maximum time to wait for calibration (seconds)
     """
+    global running
+    
+    # Set up signal handler
+    signal.signal(signal.SIGINT, signal_handler)
+    
     print_banner()
 
-    print("[INFO] Starting forced calibration...")
-    print("[INFO] Please ensure:")
-    print("       - All Lighthouse base stations are powered on")
-    print("       - Tracker has clear line of sight to lighthouses")
-    print("       - Tracker is stationary during calibration")
+    logger.info("Starting forced calibration...")
+    logger.info("Please ensure:")
+    logger.info("  - All Lighthouse base stations are powered on")
+    logger.info("  - Tracker(s) have clear line of sight to lighthouses")
+    logger.info("  - Tracker(s) are stationary during calibration")
     print()
 
     # Build arguments with force-calibrate flag
@@ -62,110 +92,158 @@ def calibrate_vive(timeout=60):
     args.extend(["--force-calibrate"])
 
     # Initialize pysurvive context with calibration flag
-    print("[INFO] Initializing pysurvive with --force-calibrate...")
+    logger.info("Initializing pysurvive with --force-calibrate...")
     try:
         actx = pysurvive.SimpleContext(args)
     except Exception as e:
-        print(f"[ERROR] Failed to initialize pysurvive: {e}")
+        logger.error(f"Failed to initialize pysurvive: {e}")
         return False
 
-    print("[INFO] Waiting for devices...")
-    time.sleep(2.0)
-
-    # Check for detected devices
-    devices = list(actx.Objects())
-    lighthouses = []
-    trackers = []
-
-    for obj in devices:
-        name = str(obj.Name(), "utf-8")
-        if name.startswith("LH"):
-            lighthouses.append(name)
-        else:
-            trackers.append(name)
-
-    print(f"[INFO] Detected Lighthouses: {lighthouses}")
-    print(f"[INFO] Detected Trackers: {trackers}")
+    logger.info("Waiting for devices (using NextUpdated method)...")
+    
+    # Device tracking
+    detected_devices = {}  # {name: {"samples": 0, "valid": 0, "last_pos": None}}
+    start_time = time.time()
+    last_status_time = 0
+    
+    # Initial device detection phase (5 seconds)
+    logger.info("Device detection phase (5 seconds)...")
+    detection_start = time.time()
+    while time.time() - detection_start < 5.0 and running:
+        updated = actx.NextUpdated()
+        if updated:
+            name = str(updated.Name(), "utf-8")
+            if name not in detected_devices:
+                detected_devices[name] = {"samples": 0, "valid": 0, "last_pos": None}
+                logger.info(f"Detected: {name}")
+        time.sleep(0.01)
+    
+    # Categorize devices
+    lighthouses = [n for n in detected_devices if is_lighthouse_device(n)]
+    trackers = [n for n in detected_devices if is_tracker_device(n)]
+    
+    logger.info(f"Detected Lighthouses: {lighthouses}")
+    logger.info(f"Detected Trackers: {trackers}")
 
     if len(lighthouses) < 2:
-        print(f"[WARNING] Only {len(lighthouses)} lighthouse(s) detected. "
-              "For best results, 2 lighthouses are recommended.")
+        logger.warn(f"Only {len(lighthouses)} lighthouse(s) detected. "
+                   "For best results, 2 lighthouses are recommended.")
 
     if not trackers:
-        print("[WARNING] No trackers detected yet. Continuing to wait...")
+        logger.warn("No trackers detected! Will continue waiting during calibration...")
 
     print()
-    print("[INFO] Calibrating... Keep the tracker stationary!")
-    print("[INFO] Press Ctrl+C to stop")
+    logger.info("Calibrating... Keep all trackers stationary!")
+    logger.info("Press Ctrl+C to stop")
     print()
 
     # Run calibration loop
-    start_time = time.time()
-    last_print_time = 0
-    sample_count = 0
-    valid_samples = 0
-
     try:
-        while actx.Running():
+        while actx.Running() and running:
             elapsed = time.time() - start_time
 
             # Check timeout
             if elapsed > timeout:
-                print(f"\n[INFO] Calibration timeout ({timeout}s) reached.")
+                logger.info(f"Calibration timeout ({timeout}s) reached.")
                 break
 
             updated = actx.NextUpdated()
             if updated:
-                sample_count += 1
+                name = str(updated.Name(), "utf-8")
+                
+                # Add new device if not seen before
+                if name not in detected_devices:
+                    detected_devices[name] = {"samples": 0, "valid": 0, "last_pos": None}
+                    if is_tracker_device(name):
+                        logger.info(f"New tracker detected during calibration: {name}")
+                        trackers.append(name)
+                    elif is_lighthouse_device(name):
+                        lighthouses.append(name)
+                
                 pose_obj = updated.Pose()
                 pose_data = pose_obj[0]
-                device_name = str(updated.Name(), "utf-8")
 
-                # Check if position is reasonable (not NaN and within reasonable range)
+                # Get position
                 pos = [pose_data.Pos[0], pose_data.Pos[1], pose_data.Pos[2]]
-                if all(abs(p) < 10 for p in pos) and not any(p != p for p in pos):  # Check NaN
-                    valid_samples += 1
+                
+                detected_devices[name]["samples"] += 1
+                detected_devices[name]["last_pos"] = pos
+                
+                # Check if position is valid (not NaN and within reasonable range)
+                if all(abs(p) < 100 for p in pos) and not any(p != p for p in pos):
+                    detected_devices[name]["valid"] += 1
 
-                # Print progress every 2 seconds
-                current_time = time.time()
-                if current_time - last_print_time >= 2.0:
-                    last_print_time = current_time
-                    print(f"[{elapsed:.0f}s] {device_name}: "
-                          f"Pos=[{pos[0]:7.3f}, {pos[1]:7.3f}, {pos[2]:7.3f}] "
-                          f"Samples: {sample_count}, Valid: {valid_samples}")
+            # Print status every 3 seconds
+            current_time = time.time()
+            if current_time - last_status_time >= 3.0:
+                last_status_time = current_time
+                print()
+                print(f"[{elapsed:.0f}s] Calibration Status:")
+                print("-" * 50)
+                
+                for name in trackers:
+                    if name in detected_devices:
+                        info = detected_devices[name]
+                        pos = info["last_pos"]
+                        if pos:
+                            pos_str = f"[{pos[0]:+7.3f}, {pos[1]:+7.3f}, {pos[2]:+7.3f}]"
+                        else:
+                            pos_str = "[no data]"
+                        print(f"  {name}: Samples={info['samples']:5d}, "
+                              f"Valid={info['valid']:5d}, Pos={pos_str}")
+                
+                if not trackers:
+                    print("  No trackers detected yet...")
+                print("-" * 50)
 
-            # Small sleep to prevent CPU overload
             time.sleep(0.001)
 
-    except KeyboardInterrupt:
-        print("\n[INFO] Calibration interrupted by user.")
+    except Exception as e:
+        logger.error(f"Error during calibration: {e}")
 
+    # Print summary
     print()
     print("=" * 60)
     print("         Calibration Summary")
     print("=" * 60)
-    print(f"Total samples collected: {sample_count}")
-    print(f"Valid samples: {valid_samples}")
     print(f"Duration: {time.time() - start_time:.1f} seconds")
+    print(f"Lighthouses: {lighthouses}")
+    print(f"Trackers: {trackers}")
     print()
-
-    if valid_samples > 100:
-        print("[SUCCESS] Calibration completed successfully!")
-        print("[INFO] Configuration should be saved to ~/.config/libsurvive/")
+    
+    # Per-tracker summary
+    all_success = True
+    for name in trackers:
+        if name in detected_devices:
+            info = detected_devices[name]
+            status = "✅ OK" if info["valid"] > 100 else "⚠️ LOW SAMPLES"
+            if info["valid"] <= 100:
+                all_success = False
+            print(f"  {name}: {info['samples']} samples, {info['valid']} valid - {status}")
+    
+    if not trackers:
+        print("  No trackers were detected!")
+        all_success = False
+    
+    print()
+    
+    if all_success and trackers:
+        logger.info("Calibration completed successfully for all trackers!")
+        logger.info("Configuration should be saved to ~/.config/libsurvive/")
         return True
     else:
-        print("[WARNING] Low number of valid samples. Calibration may not be accurate.")
-        print("[TIP] Try the following:")
-        print("      - Check if lighthouses are powered on and have green LED")
-        print("      - Ensure tracker has clear line of sight to lighthouses")
-        print("      - Move tracker closer to lighthouses")
-        print("      - Run calibration for longer duration with --timeout")
+        logger.warn("Some trackers have low sample counts. Try:")
+        logger.warn("  - Check if lighthouses are powered on (green LED)")
+        logger.warn("  - Ensure trackers have clear line of sight to lighthouses")
+        logger.warn("  - Make sure trackers are paired with dongles (green LED on tracker)")
+        logger.warn("  - Move trackers closer to lighthouses")
+        logger.warn("  - Run calibration for longer with --timeout")
         return False
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Vive Tracker Calibration Tool",
+        description="Vive Tracker Calibration Tool - Calibrates all detected trackers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

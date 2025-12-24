@@ -20,7 +20,6 @@ Test the functionalities of XenseGripper and print the data
 """
 
 import time
-import logging
 import argparse
 import numpy as np
 
@@ -181,9 +180,8 @@ def main():
     print("\nInitializing FlareGrip...")
     flare = FlareGrip(
         mac_addr=args.mac,
-        vive_sn=args.vive_sn,
         cam_size=(640, 480),
-        log_level=logging.INFO,
+        log_level="INFO",
         no_gripper=args.no_gripper,
         no_sensor=args.no_sensor,
         no_vive=args.no_vive,

@@ -23,7 +23,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import logging  # noqa: E402
 import argparse  # noqa: E402
 
 from xesne_gripper import FlareGrip  # noqa: E402
@@ -46,7 +45,7 @@ def main():
     print(f"\nInitializing FlareGrip (MAC: {args.mac})...")
     flare = FlareGrip(
         mac_addr=args.mac,
-        log_level=logging.INFO,
+        log_level="INFO",
         no_sensor=True,
         no_vive=True,
         no_cam=True,
