@@ -1,4 +1,0 @@
-examples
-utils
-vive_tracker
-xesne_gripper
