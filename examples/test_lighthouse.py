@@ -44,7 +44,7 @@ while time.time() - start_time < timeout:
         trackers = [n for n in detected_devices if n.startswith("WM") or n.startswith("T2")]
         
         if len(lighthouses) >= 2 and len(trackers) >= 2:
-            break
+        break
 
 # 最终结果
 print("\n" + "="*50)
@@ -63,7 +63,7 @@ for name, info in detected_devices.items():
         if "last_pose" in info:
             pos = info["last_pose"]["pos"]
             print(f"  {name} 位置: x={pos[0]:.3f}, y={pos[1]:.3f}, z={pos[2]:.3f}")
-    else:
+else:
         others.append(name)
 
 print(f"\n基站 (Lighthouses): {lighthouses if lighthouses else '无'}")

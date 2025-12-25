@@ -120,7 +120,7 @@ def calibrate_vive(timeout=60, origin="tracker"):
         return False
 
     logger.info("Waiting for devices (using NextUpdated method)...")
-    
+
     # Device tracking
     detected_devices = {}  # {name: {"samples": 0, "valid": 0, "last_pos": None}}
     start_time = time.time()
@@ -147,7 +147,7 @@ def calibrate_vive(timeout=60, origin="tracker"):
 
     if len(lighthouses) < 2:
         logger.warn(f"Only {len(lighthouses)} lighthouse(s) detected. "
-                   "For best results, 2 lighthouses are recommended.")
+              "For best results, 2 lighthouses are recommended.")
 
     if not trackers:
         logger.warn("No trackers detected! Will continue waiting during calibration...")
@@ -173,7 +173,7 @@ def calibrate_vive(timeout=60, origin="tracker"):
                 
                 # Add new device if not seen before
                 if name not in detected_devices:
-                    detected_devices[name] = {"samples": 0, "valid": 0, "last_pos": None}
+                    detected_devices[name] = {"samples": 0, "valid": 0, "last_pos": None, "last_rot": None}
                     if is_tracker_device(name):
                         logger.info(f"New tracker detected during calibration: {name}")
                         trackers.append(name)
@@ -183,18 +183,20 @@ def calibrate_vive(timeout=60, origin="tracker"):
                 pose_obj = updated.Pose()
                 pose_data = pose_obj[0]
 
-                # Get position
+                # Get position and rotation
                 pos = [pose_data.Pos[0], pose_data.Pos[1], pose_data.Pos[2]]
+                rot = [pose_data.Rot[0], pose_data.Rot[1], pose_data.Rot[2], pose_data.Rot[3]]  # [w, x, y, z]
                 
                 detected_devices[name]["samples"] += 1
                 detected_devices[name]["last_pos"] = pos
+                detected_devices[name]["last_rot"] = rot
                 
                 # Check if position is valid (not NaN and within reasonable range)
                 if all(abs(p) < 100 for p in pos) and not any(p != p for p in pos):
                     detected_devices[name]["valid"] += 1
 
             # Print status every 3 seconds
-            current_time = time.time()
+                current_time = time.time()
             if current_time - last_status_time >= 3.0:
                 last_status_time = current_time
                 print()
@@ -205,12 +207,18 @@ def calibrate_vive(timeout=60, origin="tracker"):
                     if name in detected_devices:
                         info = detected_devices[name]
                         pos = info["last_pos"]
+                        rot = info["last_rot"]
                         if pos:
                             pos_str = f"[{pos[0]:+7.3f}, {pos[1]:+7.3f}, {pos[2]:+7.3f}]"
                         else:
                             pos_str = "[no data]"
-                        print(f"  {name}: Samples={info['samples']:5d}, "
-                              f"Valid={info['valid']:5d}, Pos={pos_str}")
+                        if rot:
+                            rot_str = f"[{rot[0]:+6.3f}, {rot[1]:+6.3f}, {rot[2]:+6.3f}, {rot[3]:+6.3f}]"
+                        else:
+                            rot_str = "[no data]"
+                        print(f"  {name}: Samples={info['samples']:5d}, Valid={info['valid']:5d}")
+                        print(f"         Pos={pos_str}")
+                        print(f"         Rot={rot_str}")
                 
                 if not trackers:
                     print("  No trackers detected yet...")
@@ -247,7 +255,7 @@ def calibrate_vive(timeout=60, origin="tracker"):
         all_success = False
     
     print()
-    
+
     if all_success and trackers:
         logger.info("Calibration completed successfully for all trackers!")
         logger.info("Configuration should be saved to ~/.config/libsurvive/")

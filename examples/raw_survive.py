@@ -49,8 +49,8 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     logger.info("Initializing pysurvive...")
-    actx = pysurvive.SimpleContext(sys.argv)
-    
+actx = pysurvive.SimpleContext(sys.argv)
+
     logger.info("Waiting for devices...")
     time.sleep(2.0)
     
@@ -69,10 +69,10 @@ def main():
     print()
     
     last_print_time = {}
-    
+
     while actx.Running() and running:
-        updated = actx.NextUpdated()
-        if updated:
+    updated = actx.NextUpdated()
+    if updated:
             name = str(updated.Name(), "utf-8")
             
             # Track new devices
@@ -84,9 +84,9 @@ def main():
             seen_devices[name]["count"] += 1
             
             # Get pose data
-            poseObj = updated.Pose()
-            poseData = poseObj[0]
-            poseTimestamp = poseObj[1]
+        poseObj = updated.Pose()
+        poseData = poseObj[0]
+        poseTimestamp = poseObj[1]
             
             # Only print tracker data (not lighthouses), and limit rate
             if not name.startswith("LH"):

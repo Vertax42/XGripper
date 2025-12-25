@@ -77,10 +77,9 @@ def main():
     print("XGripper Visualization Example")
     print("=" * 50)
 
-    # Initialize visualizer with unique session name (avoids loading cached blueprint)
+    # Initialize visualizer
     print("\nInitializing Rerun visualizer...")
-    session_name = f"xgripper_{int(time.time())}"
-    viz = XGripperVisualizer(session_name=session_name)
+    viz = XGripperVisualizer(session_name="xgripper")
     if not viz.init():
         print("Error: Failed to initialize Rerun visualizer")
         sys.exit(1)
