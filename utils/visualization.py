@@ -100,7 +100,24 @@ def init_rerun(
         batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
         os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
 
+        # Suppress warnings and logging to avoid TextLog clutter
+        import warnings
+        import logging
+        
+        # Suppress all warnings
+        warnings.filterwarnings("ignore")
+        
+        # Suppress rerun internal logging  
+        logging.getLogger("rerun").setLevel(logging.CRITICAL)
+        
+        # Save original showwarning before Rerun can override it
+        original_showwarning = warnings.showwarning
+        
+        # Initialize Rerun
         rr.init(session_name)
+        
+        # Restore original showwarning (removes Rerun's warning capture)
+        warnings.showwarning = original_showwarning
 
         # Asynchronous workflow: save to file
         if save_path:
@@ -125,6 +142,7 @@ def log_camera_image(
     image: np.ndarray,
     camera_name: str = "wrist",
     entity_path: str | None = None,
+    color_format: str = "RGB",
 ) -> None:
     """
     Log a camera image to Rerun.
@@ -134,6 +152,8 @@ def log_camera_image(
             Supports RGB (3 channels), RGBA (4 channels), or grayscale (1 channel).
         camera_name: Name of the camera (e.g., "wrist", "side").
         entity_path: Custom entity path. If None, uses "{CAMERA_PREFIX}/{camera_name}".
+        color_format: Color format of input image. "RGB" (default) or "BGR".
+            If "BGR", will be converted to RGB before logging.
     """
     if not check_rerun_available():
         return
@@ -150,6 +170,10 @@ def log_camera_image(
         and image.shape[-1] not in (1, 3, 4)
     ):
         image = np.transpose(image, (1, 2, 0))
+
+    # Convert BGR to RGB if needed
+    if color_format.upper() == "BGR" and image.ndim == 3 and image.shape[2] == 3:
+        image = image[:, :, ::-1]
 
     rr.log(path, rr.Image(image))
 
@@ -182,6 +206,67 @@ def log_gripper_state(
         rr.log(f"{entity_path}/force", rr.Scalars(float(force)))
 
 
+def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
+    """Convert quaternion [qx, qy, qz, qw] to 3x3 rotation matrix."""
+    qx, qy, qz, qw = q
+    
+    # Rotation matrix from quaternion
+    return np.array([
+        [1 - 2*(qy**2 + qz**2), 2*(qx*qy - qz*qw), 2*(qx*qz + qy*qw)],
+        [2*(qx*qy + qz*qw), 1 - 2*(qx**2 + qz**2), 2*(qy*qz - qx*qw)],
+        [2*(qx*qz - qy*qw), 2*(qy*qz + qx*qw), 1 - 2*(qx**2 + qy**2)]
+    ])
+
+
+def log_coordinate_axes(
+    entity_path: str,
+    position: np.ndarray,
+    rotation: np.ndarray,
+    axis_length: float = 0.1,
+) -> None:
+    """
+    Log coordinate axes (XYZ) at a given pose.
+    
+    Args:
+        entity_path: Base entity path
+        position: Position [x, y, z]
+        rotation: Quaternion [qw, qx, qy, qz] (w, x, y, z order)
+        axis_length: Length of each axis arrow
+    """
+    if not check_rerun_available():
+        return
+    
+    # Convert from [qw, qx, qy, qz] to [qx, qy, qz, qw] for quaternion_to_rotation_matrix
+    rot_xyzw = np.array([rotation[1], rotation[2], rotation[3], rotation[0]])
+    
+    # Convert quaternion to rotation matrix
+    R = quaternion_to_rotation_matrix(rot_xyzw)
+    
+    # Axis directions in world frame
+    x_axis = R @ np.array([axis_length, 0, 0])
+    y_axis = R @ np.array([0, axis_length, 0])
+    z_axis = R @ np.array([0, 0, axis_length])
+    
+    # Log arrows for each axis
+    origins = np.array([position, position, position])
+    vectors = np.array([x_axis, y_axis, z_axis])
+    colors = np.array([
+        [255, 0, 0],    # X - Red
+        [0, 255, 0],    # Y - Green
+        [0, 0, 255],    # Z - Blue
+    ])
+    
+    rr.log(
+        f"{entity_path}/axes",
+        rr.Arrows3D(
+            origins=origins,
+            vectors=vectors,
+            colors=colors,
+            radii=0.003,
+        ),
+    )
+
+
 def log_vive_pose(
     device_name: str,
     position: list[float] | np.ndarray,
@@ -195,13 +280,15 @@ def log_vive_pose(
 
     Logs:
     - 3D transform (position + rotation as quaternion)
-    - Individual position components as scalars
-    - Trajectory as a line strip (if enabled)
+    - Red point at tracker position
+    - Coordinate axes (XYZ arrows)
+    - Label with device name
+    - Individual position/rotation components as scalars
 
     Args:
         device_name: Name of the Vive device (e.g., "T20", "HMD").
         position: Position [x, y, z] in meters.
-        rotation: Quaternion [qx, qy, qz, qw].
+        rotation: Quaternion [qw, qx, qy, qz] (w, x, y, z order).
         timestamp: Optional timestamp for the pose.
         log_trajectory: Whether to log trajectory points.
         entity_path: Custom base entity path. If None, uses "{TRACKER_PREFIX}/{device_name}".
@@ -214,31 +301,43 @@ def log_vive_pose(
 
     base_path = entity_path or f"{TRACKER_PREFIX}/{device_name}"
     pos = np.array(position)
-    rot = np.array(rotation)  # [qx, qy, qz, qw]
+    rot = np.array(rotation)  # [qw, qx, qy, qz]
+    
+    # Convert from [qw, qx, qy, qz] to [qx, qy, qz, qw] for Rerun
+    rot_xyzw = np.array([rot[1], rot[2], rot[3], rot[0]])
 
     # Log 3D transform using Transform3D
-    # Rerun expects quaternion in [x, y, z, w] format
     rr.log(
         f"{base_path}/pose",
         rr.Transform3D(
             translation=pos,
-            rotation=rr.Quaternion(xyzw=rot),
+            rotation=rr.Quaternion(xyzw=rot_xyzw),
         ),
     )
 
-    # Log position as 3D point for visualization
-    rr.log(f"{base_path}/point", rr.Points3D([pos], radii=[0.02]))
+    # Log position as RED 3D point for tracker (no label to avoid blocking trajectory)
+    rr.log(
+        f"{base_path}/point",
+        rr.Points3D(
+            [pos],
+            radii=[0.015],
+            colors=[[255, 50, 50]],  # Red
+        ),
+    )
+    
+    # Log coordinate axes (expects [qw, qx, qy, qz])
+    log_coordinate_axes(base_path, pos, rot, axis_length=0.08)
 
     # Log individual position components as scalars for plotting
     rr.log(f"{base_path}/position/x", rr.Scalars(float(pos[0])))
     rr.log(f"{base_path}/position/y", rr.Scalars(float(pos[1])))
     rr.log(f"{base_path}/position/z", rr.Scalars(float(pos[2])))
 
-    # Log quaternion components
-    rr.log(f"{base_path}/rotation/qx", rr.Scalars(float(rot[0])))
-    rr.log(f"{base_path}/rotation/qy", rr.Scalars(float(rot[1])))
-    rr.log(f"{base_path}/rotation/qz", rr.Scalars(float(rot[2])))
-    rr.log(f"{base_path}/rotation/qw", rr.Scalars(float(rot[3])))
+    # Log quaternion components (in wxyz order as received)
+    rr.log(f"{base_path}/rotation/qw", rr.Scalars(float(rot[0])))
+    rr.log(f"{base_path}/rotation/qx", rr.Scalars(float(rot[1])))
+    rr.log(f"{base_path}/rotation/qy", rr.Scalars(float(rot[2])))
+    rr.log(f"{base_path}/rotation/qz", rr.Scalars(float(rot[3])))
 
 
 class TrajectoryVisualizer:
@@ -333,11 +432,8 @@ class XGripperVisualizer:
                 name based on timestamp to avoid loading cached blueprints.
             max_trajectory_points: Maximum points to keep in trajectory.
         """
-        import time as _time
-
         if session_name is None:
-            # Generate unique session name to avoid cached blueprint issues
-            session_name = f"xgripper_{int(_time.time())}"
+            session_name = "xgripper"
         self.session_name = session_name
         self.trajectory_viz = TrajectoryVisualizer(max_points=max_trajectory_points)
         self.initialized = False
@@ -389,6 +485,7 @@ class XGripperVisualizer:
             "gripper_velocity": float or None,
             "gripper_force": float or None,
             "ee_pose": dict[str, PoseData] or None,
+            "sensor_rectify": dict[str, np.ndarray] or None,
         }
 
         Args:
@@ -398,9 +495,13 @@ class XGripperVisualizer:
             logger.warn("Visualizer not initialized. Call init() first.")
             return
 
-        # Log camera image
+        # Log camera image (BGR format from camera, convert to RGB)
         if data.get("wrist_img") is not None:
-            log_camera_image(data["wrist_img"], camera_name="wrist")
+            log_camera_image(
+                data["wrist_img"],
+                camera_name="wrist",
+                color_format="BGR",
+            )
 
         # Log gripper state
         log_gripper_state(
@@ -416,10 +517,6 @@ class XGripperVisualizer:
                 if pose_data is None:
                     continue
 
-                # Skip lighthouses
-                if device_name.startswith("LH"):
-                    continue
-
                 # Handle PoseData objects
                 if hasattr(pose_data, "position") and hasattr(pose_data, "rotation"):
                     position = pose_data.position
@@ -430,13 +527,83 @@ class XGripperVisualizer:
                     rotation = pose_data.get("rotation")
 
                 if position is not None and rotation is not None:
-                    log_vive_pose(
-                        device_name=device_name,
-                        position=position,
-                        rotation=rotation,
+                    # Log lighthouse as static reference points (no trajectory)
+                    if device_name.startswith("LH"):
+                        self._log_lighthouse(device_name, position, rotation)
+                    else:
+                        # Log tracker with full pose and trajectory
+                        log_vive_pose(
+                            device_name=device_name,
+                            position=position,
+                            rotation=rotation,
+                        )
+                        # Also add to trajectory
+                        self.trajectory_viz.add_point(device_name, position)
+        
+        # Log sensor rectify data
+        sensor_rectify = data.get("sensor_rectify")
+        if sensor_rectify and isinstance(sensor_rectify, dict):
+            for sn, rectify_img in sensor_rectify.items():
+                if rectify_img is not None:
+                    log_camera_image(
+                        image=rectify_img,
+                        camera_name=sn,
+                        entity_path=f"sensors/{sn}/rectify",
+                        color_format="BGR",  # Sensor outputs BGR format
                     )
-                    # Also add to trajectory
-                    self.trajectory_viz.add_point(device_name, position)
+    
+    def _log_lighthouse(
+        self,
+        device_name: str,
+        position: list[float] | np.ndarray,
+        rotation: list[float] | np.ndarray,
+    ) -> None:
+        """Log lighthouse as a static reference marker with label and coordinate axes.
+        
+        Args:
+            device_name: Name of the lighthouse device
+            position: Position [x, y, z]
+            rotation: Quaternion [qw, qx, qy, qz] (w, x, y, z order)
+        """
+        if not check_rerun_available():
+            return
+        
+        pos = np.array(position)
+        rot = np.array(rotation)  # [qw, qx, qy, qz]
+        # Convert from [qw, qx, qy, qz] to [qx, qy, qz, qw] for Rerun
+        rot_xyzw = np.array([rot[1], rot[2], rot[3], rot[0]])
+        base_path = f"{TRACKER_PREFIX}/{device_name}"
+        
+        # Use green/blue colors for LH0/LH1
+        if device_name == "LH0":
+            color = [0, 255, 100]  # Green
+        elif device_name == "LH1":
+            color = [100, 180, 255]  # Blue
+        else:
+            color = [255, 200, 100]  # Orange
+        
+        # Log 3D transform
+        rr.log(
+            f"{base_path}/pose",
+            rr.Transform3D(
+                translation=pos,
+                rotation=rr.Quaternion(xyzw=rot_xyzw),
+            ),
+        )
+        
+        # Log as LARGE 3D point with label
+        rr.log(
+            f"{base_path}/point",
+            rr.Points3D(
+                [pos],
+                radii=[0.05],  # Larger radius for lighthouses
+                colors=[color],
+                labels=[device_name],  # Add label
+            ),
+        )
+        
+        # Log coordinate axes for lighthouse pose
+        log_coordinate_axes(base_path, pos, rot, axis_length=0.15)
 
     def log_camera(self, image: np.ndarray, camera_name: str = "wrist") -> None:
         """Log a camera image."""
@@ -470,6 +637,7 @@ class XGripperVisualizer:
             add_to_trajectory: Whether to add point to trajectory history.
         """
         if not self.initialized:
+            logger.warn("Visualizer not initialized. Call init() first.")
             return
 
         log_vive_pose(device_name=device_name, position=position, rotation=rotation)
