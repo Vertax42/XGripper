@@ -16,6 +16,18 @@
 import numpy as np
 
 
+def quaternion_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+        """Multiply two quaternions q1 * q2. Both in [qw, qx, qy, qz] format."""
+        qw1, qx1, qy1, qz1 = q1
+        qw2, qx2, qy2, qz2 = q2
+
+        qw = qw1 * qw2 - qx1 * qx2 - qy1 * qy2 - qz1 * qz2
+        qx = qw1 * qx2 + qx1 * qw2 + qy1 * qz2 - qz1 * qy2
+        qy = qw1 * qy2 - qx1 * qz2 + qy1 * qw2 + qz1 * qx2
+        qz = qw1 * qz2 + qx1 * qy2 - qy1 * qx2 + qz1 * qw2
+
+        return np.array([qw, qx, qy, qz], dtype=np.float32)
+
 # helper function: turn quaternion and position to 4x4 transformation matrix
 def xyzQuaternion2matrix(x, y, z, qx, qy, qz, qw):
     """

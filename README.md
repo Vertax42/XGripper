@@ -1,5 +1,5 @@
 # XGripper
-
+# 0, 0, 0.16, 0.207, 0.676, 0.676, -0.207
 XGripper is a Python package for controlling Xense robotic grippers with integrated Vive Tracker support for spatial tracking.
 
 ## Installation
@@ -43,6 +43,13 @@ pip install -e .
    - Coordinate system: Right-handed
    - Z-axis: Aligned with gravity (up)
    - Rotation reference: Based on LH0 orientation
+
+## Hardware Specifications
+
+| Component | Max Update Rate | Latency | Notes |
+|-----------|----------------|---------|-------|
+| **Vive Tracker** | 100 Hz | ~0.02ms | Non-blocking read from cache |
+| **Tactile Sensor** | ~33 Hz (single) | ~30ms | Blocking call, ~16 Hz for 2 sensors in serial |
 
 ## Example Scripts
 

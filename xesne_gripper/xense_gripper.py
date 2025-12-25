@@ -75,18 +75,163 @@ def scan_sensors(mac_addr: str, verbose: bool = True) -> dict | None:
         return None
 
 
-def list_sensors(mac_addr: str) -> list:
+def get_system_info(mac_addr: str, verbose: bool = True) -> dict | None:
     """
-    Get list of available sensor serial numbers.
+    Get system information including all available nodes and services.
+    Similar to `ezros -a` command.
     
     Args:
         mac_addr: MAC address of the FlareGrip device
+        verbose: If True, print detailed system information
         
     Returns:
-        list: List of sensor serial numbers
+        dict: System information containing cameras, sensors, gripper status
+              or None if master node is not reachable
     """
-    sensors = scan_sensors(mac_addr, verbose=False)
-    return list(sensors.keys()) if sensors else []
+    logger = _get_module_logger()
+    
+    if verbose:
+        logger.info("=" * 60)
+        logger.info("Scanning XGripper System...")
+        logger.info("=" * 60)
+    
+    system_info = {
+        "mac_addr": mac_addr,
+        "master_node": f"master_{mac_addr}",
+        "cameras": {},
+        "sensors": {},
+        "gripper": None,
+        "connected": False,
+    }
+    
+    try:
+        # Get system info from master node
+        info = call_service(f"master_{mac_addr}", "system_info")
+        if info is not None:
+            system_info["connected"] = True
+            system_info["raw_info"] = info
+            if verbose:
+                logger.info(f"Master Node: master_{mac_addr} ✓")
+        else:
+            if verbose:
+                logger.error(f"Master Node: master_{mac_addr} ✗ (not reachable)")
+            return system_info
+    except Exception as e:
+        if verbose:
+            logger.error(f"Failed to connect to master node: {e}")
+        return system_info
+    
+    # Get camera info
+    try:
+        cameras = call_service(f"master_{mac_addr}", "list_camera")
+        if cameras:
+            system_info["cameras"] = cameras
+            if verbose:
+                logger.info(f"Cameras ({len(cameras)}):")
+                for cam_name, cam_info in cameras.items():
+                    logger.info(f"  - {cam_name}: {cam_info}")
+        else:
+            if verbose:
+                logger.info("Cameras: None detected")
+    except Exception as e:
+        if verbose:
+            logger.warn(f"Failed to list cameras: {e}")
+    
+    # Get sensor info
+    try:
+        sensors = call_service(f"master_{mac_addr}", "scan_sensor_sn")
+        if sensors:
+            system_info["sensors"] = sensors
+            if verbose:
+                logger.info(f"Sensors ({len(sensors)}):")
+                for sn, info in sensors.items():
+                    logger.info(f"  - SN: {sn}, Info: {info}")
+        else:
+            if verbose:
+                logger.info("Sensors: None detected")
+    except Exception as e:
+        if verbose:
+            logger.warn(f"Failed to scan sensors: {e}")
+    
+    # Check gripper availability
+    try:
+        # Try to check if gripper node exists
+        gripper_node = f"gripper_{mac_addr}"
+        system_info["gripper"] = gripper_node
+        if verbose:
+            logger.info(f"Gripper Node: {gripper_node}")
+    except Exception as e:
+        if verbose:
+            logger.warn(f"Failed to check gripper: {e}")
+    
+    if verbose:
+        logger.info("=" * 60)
+        logger.info("System scan complete")
+        logger.info("=" * 60)
+    
+    return system_info
+
+
+def print_system_info(mac_addr: str):
+    """
+    Print system information in a formatted way.
+    Convenient wrapper around get_system_info().
+    
+    Args:
+        mac_addr: MAC address of the FlareGrip device
+    """
+    print()
+    print("=" * 70)
+    print("                    XGripper System Information")
+    print("=" * 70)
+    
+    info = get_system_info(mac_addr, verbose=False)
+    
+    if not info or not info.get("connected"):
+        print(f"  ❌ Cannot connect to master node: master_{mac_addr}")
+        print("     Please check:")
+        print("       - Device is powered on")
+        print("       - Network connection is working")
+        print("       - MAC address is correct")
+        print("=" * 70)
+        return info
+    
+    print(f"  MAC Address: {mac_addr}")
+    print(f"  Master Node: master_{mac_addr} ✅")
+    print()
+    
+    # Cameras
+    cameras = info.get("cameras", {})
+    print(f"  📷 Cameras ({len(cameras)}):")
+    if cameras:
+        for cam_name, cam_info in cameras.items():
+            print(f"      - {cam_name}: {cam_info}")
+    else:
+        print("      (none)")
+    print()
+    
+    # Sensors
+    sensors = info.get("sensors", {})
+    print(f"  📡 Sensors ({len(sensors)}):")
+    if sensors:
+        for sn, sensor_info in sensors.items():
+            print(f"      - {sn}: {sensor_info}")
+    else:
+        print("      (none)")
+    print()
+    
+    # Gripper
+    gripper = info.get("gripper")
+    print(f"  🤖 Gripper:")
+    if gripper:
+        print(f"      - {gripper}")
+    else:
+        print("      (not available)")
+    
+    print("=" * 70)
+    print()
+    
+    return info
 
 
 class FlareGrip:
@@ -95,6 +240,7 @@ class FlareGrip:
         self,
         mac_addr: str,
         cam_size=(640, 480),
+        rectify_size=(400, 700),
         log_level: str = "INFO",
         no_gripper=False,
         no_sensor=False,
@@ -102,6 +248,7 @@ class FlareGrip:
         no_cam=False,
     ):
         self.mac_addr = mac_addr
+        self.rectify_size = rectify_size
 
         # Create spdlog logger for this instance
         logger_name = f"Flare-{self.mac_addr[:6]}"
@@ -155,7 +302,9 @@ class FlareGrip:
                 for sn in available_sensors.keys():
                     self.logger.info(f"  Initializing sensor: {sn}")
                     try:
-                        self._fg_sensors[sn] = Sensor.create(sn, mac_addr=self.mac_addr)
+                        self._fg_sensors[sn] = Sensor.create(
+                            sn, mac_addr=self.mac_addr, rectify_size=self.rectify_size
+                        )
                         self.logger.info(f"  Sensor {sn} initialized successfully")
                     except Exception as e:
                         self.logger.error(f"  Failed to initialize sensor {sn}: {e}")
@@ -177,6 +326,10 @@ class FlareGrip:
         # init gripper
         if not no_gripper:
             self._fg_gripper = XenseGripper.create(self.mac_addr)
+            if self._fg_gripper is not None:
+                self.logger.info("Gripper initialized successfully")
+            else:
+                self.logger.warn("Failed to initialize gripper (XenseGripper.create returned None)")
 
         # init vive tracker
         if not no_vive:
@@ -294,13 +447,32 @@ class FlareGrip:
             self.logger.warn("No vive tracker initialized, cannot get pose data")
             return None if device_name else {}
 
-    def recv_data(self, ee_pose=True, gripper=True, wrist_img=True):
+    def recv_data(self, ee_pose=True, gripper=True, wrist_img=True, sensor=True):
+        """
+        Receive all data from FlareGrip components.
+        
+        Args:
+            ee_pose: Whether to get end-effector pose (Vive tracker) data
+            gripper: Whether to get gripper status data
+            wrist_img: Whether to get wrist camera image
+            sensor: Whether to get sensor rectify data
+            
+        Returns:
+            dict: Dictionary containing all requested data:
+                - wrist_img: Camera image (np.ndarray or None)
+                - gripper_position: Gripper position (float or None)
+                - gripper_velocity: Gripper velocity (float or None)
+                - gripper_force: Gripper force (float or None)
+                - ee_pose: End-effector pose (dict or None)
+                - sensor_rectify: Sensor rectify images (dict[str, np.ndarray] or None)
+        """
         data = {
             "wrist_img": None,
             "gripper_position": None,
             "gripper_velocity": None,
             "gripper_force": None,
             "ee_pose": None,
+            "sensor_rectify": None,
         }
 
         # get camera data
@@ -310,16 +482,34 @@ class FlareGrip:
 
         # get gripper data
         if gripper and self._fg_gripper is not None:
-            gripper_status = self._fg_gripper.get_gripper_status()
-            if gripper_status is not None:
-                data["gripper_position"] = gripper_status.get("position")
-                data["gripper_velocity"] = gripper_status.get("velocity")
-                data["gripper_force"] = gripper_status.get("force")
-            else:
-                self.logger.debug("Gripper status not available")
+            try:
+                gripper_status = self._fg_gripper.get_gripper_status()
+                if gripper_status is not None:
+                    data["gripper_position"] = gripper_status.get("position")
+                    data["gripper_velocity"] = gripper_status.get("velocity")
+                    data["gripper_force"] = gripper_status.get("force")
+                else:
+                    self.logger.debug("Gripper status returned None")
+            except Exception as e:
+                self.logger.warn(f"Failed to get gripper status: {e}")
 
+        # get end-effector pose data
         if ee_pose:
             data["ee_pose"] = self.get_pose()
+
+        # get sensor rectify data
+        if sensor and self._fg_sensors:
+            sensor_rectify = {}
+            for sn, sensor_obj in self._fg_sensors.items():
+                try:
+                    rectify = sensor_obj.selectSensorInfo(Sensor.OutputType.Rectify)
+                    if rectify is not None:
+                        sensor_rectify[sn] = rectify
+                except Exception as e:
+                    self.logger.debug(f"Failed to read sensor {sn} rectify data: {e}")
+            
+            if sensor_rectify:
+                data["sensor_rectify"] = sensor_rectify
 
         return data
 
