@@ -66,10 +66,9 @@ def is_lighthouse_device(name: str) -> bool:
 
 
 def print_banner():
-    print("=" * 60)
-    print("         Vive Tracker Calibration Tool")
-    print("=" * 60)
-    print()
+    logger.info("=" * 60)
+    logger.info("         Vive Tracker Calibration Tool")
+    logger.info("=" * 60)
 
 
 def calibrate_vive(timeout=60, origin="tracker"):
@@ -94,14 +93,12 @@ def calibrate_vive(timeout=60, origin="tracker"):
         logger.info("Origin Mode: LH0 (Lighthouse 0 at origin, looking +X)")
     else:
         logger.info("Origin Mode: Tracker (Tracker at origin, LH0 on +Y axis)")
-    print()
 
     logger.info("Starting forced calibration...")
     logger.info("Please ensure:")
     logger.info("  - All Lighthouse base stations are powered on")
     logger.info("  - Tracker(s) have clear line of sight to lighthouses")
     logger.info("  - Tracker(s) are stationary during calibration")
-    print()
 
     # Build arguments with force-calibrate flag
     args = sys.argv[:1]  # Keep program name
@@ -152,10 +149,8 @@ def calibrate_vive(timeout=60, origin="tracker"):
     if not trackers:
         logger.warn("No trackers detected! Will continue waiting during calibration...")
 
-    print()
     logger.info("Calibrating... Keep all trackers stationary!")
     logger.info("Press Ctrl+C to stop")
-    print()
 
     # Run calibration loop
     try:
@@ -199,9 +194,8 @@ def calibrate_vive(timeout=60, origin="tracker"):
                 current_time = time.time()
             if current_time - last_status_time >= 3.0:
                 last_status_time = current_time
-                print()
-                print(f"[{elapsed:.0f}s] Calibration Status:")
-                print("-" * 50)
+                logger.info(f"[{elapsed:.0f}s] Calibration Status:")
+                logger.info("-" * 50)
                 
                 for name in trackers:
                     if name in detected_devices:
@@ -216,13 +210,13 @@ def calibrate_vive(timeout=60, origin="tracker"):
                             rot_str = f"[{rot[0]:+6.3f}, {rot[1]:+6.3f}, {rot[2]:+6.3f}, {rot[3]:+6.3f}]"
                         else:
                             rot_str = "[no data]"
-                        print(f"  {name}: Samples={info['samples']:5d}, Valid={info['valid']:5d}")
-                        print(f"         Pos={pos_str}")
-                        print(f"         Rot={rot_str}")
+                        logger.info(f"  {name}: Samples={info['samples']:5d}, Valid={info['valid']:5d}")
+                        logger.info(f"         Pos={pos_str}")
+                        logger.info(f"         Rot={rot_str}")
                 
                 if not trackers:
-                    print("  No trackers detected yet...")
-                print("-" * 50)
+                    logger.info("  No trackers detected yet...")
+                logger.info("-" * 50)
 
             time.sleep(0.001)
 
@@ -230,31 +224,27 @@ def calibrate_vive(timeout=60, origin="tracker"):
         logger.error(f"Error during calibration: {e}")
 
     # Print summary
-    print()
-    print("=" * 60)
-    print("         Calibration Summary")
-    print("=" * 60)
-    print(f"Duration: {time.time() - start_time:.1f} seconds")
-    print(f"Origin Mode: {'LH0 (Lighthouse at origin)' if origin == 'lh0' else 'Tracker (Tracker at origin)'}")
-    print(f"Lighthouses: {lighthouses}")
-    print(f"Trackers: {trackers}")
-    print()
+    logger.info("=" * 60)
+    logger.info("         Calibration Summary")
+    logger.info("=" * 60)
+    logger.info(f"Duration: {time.time() - start_time:.1f} seconds")
+    logger.info(f"Origin Mode: {'LH0 (Lighthouse at origin)' if origin == 'lh0' else 'Tracker (Tracker at origin)'}")
+    logger.info(f"Lighthouses: {lighthouses}")
+    logger.info(f"Trackers: {trackers}")
     
     # Per-tracker summary
     all_success = True
     for name in trackers:
         if name in detected_devices:
             info = detected_devices[name]
-            status = "✅ OK" if info["valid"] > 100 else "⚠️ LOW SAMPLES"
+            status = "OK" if info["valid"] > 100 else "LOW SAMPLES"
             if info["valid"] <= 100:
                 all_success = False
-            print(f"  {name}: {info['samples']} samples, {info['valid']} valid - {status}")
+            logger.info(f"  {name}: {info['samples']} samples, {info['valid']} valid - {status}")
     
     if not trackers:
-        print("  No trackers were detected!")
+        logger.info("  No trackers were detected!")
         all_success = False
-    
-    print()
 
     if all_success and trackers:
         logger.info("Calibration completed successfully for all trackers!")
