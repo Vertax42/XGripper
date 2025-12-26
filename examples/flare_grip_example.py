@@ -98,13 +98,13 @@ def format_live_data(flare: FlareGrip, data: dict, frame_count: int, fps: float,
     if data.get("gripper_position") is not None:
         pos = data['gripper_position']
         vel = data['gripper_velocity']
-        force = data['gripper_force']
-        # Create visual bar for position (0-100)
+        # Create visual bar for position (0-85, where 85 is fully open)
+        GRIPPER_MAX_POS = 85.0
         bar_width = 20
-        filled = int(max(0, min(100, pos)) / 100 * bar_width)
+        filled = int(max(0, min(GRIPPER_MAX_POS, pos)) / GRIPPER_MAX_POS * bar_width)
         bar = "█" * filled + "░" * (bar_width - filled)
-        lines.append(f"│  Position: [{bar}] {pos:6.2f}%")
-        lines.append(f"│  Velocity: {vel:+8.3f}  |  Force: {force:+8.3f}")
+        lines.append(f"│  Position: [{bar}] {pos:6.2f}")
+        lines.append(f"│  Velocity: {vel:+8.3f}")
     else:
         lines.append("│  (No gripper data)")
     lines.append("└" + "─" * 69)
@@ -190,7 +190,7 @@ def run_live_monitor(flare: FlareGrip, args, viz: XGripperVisualizer = None):
             if not gripper_debug_logged and not args.no_gripper:
                 if data.get("gripper_position") is not None:
                     logger.info(f"Gripper data received: pos={data['gripper_position']:.2f}, "
-                               f"vel={data['gripper_velocity']:.2f}, force={data['gripper_force']:.2f}")
+                               f"vel={data['gripper_velocity']:.2f}")
                     gripper_debug_logged = True
                 elif frame_count == 0:
                     logger.warn("Gripper status is None - may need calibration")

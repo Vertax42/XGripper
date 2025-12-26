@@ -171,9 +171,8 @@ def run_demo_mode(viz: XGripperVisualizer, hz: float = 30.0):
             img[mask] = [255, 200, 100]
 
             # Generate synthetic gripper data (oscillating)
-            gripper_pos = 50 + 40 * np.sin(t)
-            gripper_vel = 40 * np.cos(t)
-            gripper_force = 10 + 5 * np.abs(np.sin(t * 0.5))
+            gripper_pos = 50 + 35 * np.sin(t)  # Range 15-85 (0-85 is gripper range)
+            gripper_vel = 35 * np.cos(t)
 
             # Generate synthetic Vive tracker pose (circular motion)
             tracker_pos = [
@@ -190,7 +189,6 @@ def run_demo_mode(viz: XGripperVisualizer, hz: float = 30.0):
             viz.log_gripper(
                 position=gripper_pos,
                 velocity=gripper_vel,
-                force=gripper_force,
             )
             viz.log_tracker_pose(
                 device_name="T20_demo",

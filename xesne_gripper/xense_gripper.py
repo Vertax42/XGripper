@@ -462,7 +462,6 @@ class FlareGrip:
                 - wrist_img: Camera image (np.ndarray or None)
                 - gripper_position: Gripper position (float or None)
                 - gripper_velocity: Gripper velocity (float or None)
-                - gripper_force: Gripper force (float or None)
                 - ee_pose: End-effector pose (dict or None)
                 - sensor_rectify: Sensor rectify images (dict[str, np.ndarray] or None)
         """
@@ -470,7 +469,6 @@ class FlareGrip:
             "wrist_img": None,
             "gripper_position": None,
             "gripper_velocity": None,
-            "gripper_force": None,
             "ee_pose": None,
             "sensor_rectify": None,
         }
@@ -487,7 +485,6 @@ class FlareGrip:
                 if gripper_status is not None:
                     data["gripper_position"] = gripper_status.get("position")
                     data["gripper_velocity"] = gripper_status.get("velocity")
-                    data["gripper_force"] = gripper_status.get("force")
                 else:
                     self.logger.debug("Gripper status returned None")
             except Exception as e:
