@@ -19,7 +19,7 @@ Visualization module for XGripper using Rerun.
 
 Provides real-time visualization of:
 - Camera images (wrist camera)
-- Gripper state (position, velocity, force)
+- Gripper state (position, velocity)
 - Vive Tracker poses and trajectories
 """
 
@@ -181,16 +181,14 @@ def log_camera_image(
 def log_gripper_state(
     position: float | None = None,
     velocity: float | None = None,
-    force: float | None = None,
     entity_path: str = GRIPPER_PREFIX,
 ) -> None:
     """
-    Log gripper state (position, velocity, force) to Rerun.
+    Log gripper state (position, velocity) to Rerun.
 
     Args:
-        position: Gripper position (0-100 range typically).
+        position: Gripper position (0-85 range, 85 is fully open).
         velocity: Gripper velocity.
-        force: Gripper force reading.
         entity_path: Base entity path for gripper data.
     """
     if not check_rerun_available():
@@ -201,9 +199,6 @@ def log_gripper_state(
 
     if velocity is not None:
         rr.log(f"{entity_path}/velocity", rr.Scalars(float(velocity)))
-
-    if force is not None:
-        rr.log(f"{entity_path}/force", rr.Scalars(float(force)))
 
 
 def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
@@ -483,7 +478,6 @@ class XGripperVisualizer:
             "wrist_img": np.ndarray or None,
             "gripper_position": float or None,
             "gripper_velocity": float or None,
-            "gripper_force": float or None,
             "ee_pose": dict[str, PoseData] or None,
             "sensor_rectify": dict[str, np.ndarray] or None,
         }
@@ -507,7 +501,6 @@ class XGripperVisualizer:
         log_gripper_state(
             position=data.get("gripper_position"),
             velocity=data.get("gripper_velocity"),
-            force=data.get("gripper_force"),
         )
 
         # Log Vive tracker poses
@@ -614,11 +607,10 @@ class XGripperVisualizer:
         self,
         position: float | None = None,
         velocity: float | None = None,
-        force: float | None = None,
     ) -> None:
         """Log gripper state."""
         if self.initialized:
-            log_gripper_state(position=position, velocity=velocity, force=force)
+            log_gripper_state(position=position, velocity=velocity)
 
     def log_tracker_pose(
         self,
@@ -654,7 +646,6 @@ def log_xgripper_data(
     wrist_img: np.ndarray | None = None,
     gripper_position: float | None = None,
     gripper_velocity: float | None = None,
-    gripper_force: float | None = None,
     vive_poses: dict[str, Any] | None = None,
 ) -> None:
     """
@@ -667,7 +658,6 @@ def log_xgripper_data(
         wrist_img: Camera image (HWC format).
         gripper_position: Gripper position value.
         gripper_velocity: Gripper velocity value.
-        gripper_force: Gripper force value.
         vive_poses: Dictionary of device_name -> PoseData or pose dict.
     """
     if not check_rerun_available():
@@ -681,7 +671,6 @@ def log_xgripper_data(
     log_gripper_state(
         position=gripper_position,
         velocity=gripper_velocity,
-        force=gripper_force,
     )
 
     # Log Vive poses
