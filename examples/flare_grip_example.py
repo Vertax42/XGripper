@@ -44,9 +44,11 @@ def move_cursor_up(lines: int):
     sys.stdout.flush()
 
 
-def button_callback(event):
-    """Button callback function"""
-    logger.info(f"[Button Event] {event}")
+def make_button_callback(event_type: str):
+    """Create a callback function for a specific button event type"""
+    def callback():
+        logger.info(f"[Button Event] {event_type}")
+    return callback
 
 
 def format_live_data(flare: FlareGrip, data: dict, frame_count: int, fps: float, timing: dict = None) -> list[str]:
@@ -368,8 +370,8 @@ Examples:
     # Register button callback
     # Valid event types: CLICK, DOUBLE_CLICK, LONG_PRESS, PRESS, RELEASE
     if not args.no_gripper:
-        flare.register_button_callback("PRESS", button_callback)
-        flare.register_button_callback("RELEASE", button_callback)
+        flare.register_button_callback("PRESS", make_button_callback("PRESS"))
+        flare.register_button_callback("RELEASE", make_button_callback("RELEASE"))
         logger.info("Button callbacks registered.")
 
     try:

@@ -46,15 +46,18 @@ last_button_event = None
 last_button_event_time = 0.0
 
 
-def button_callback(event):
-    """Callback function for gripper button events"""
-    global last_button_event, last_button_event_time
-    event_type = str(event)
-    button_events[event_type] += 1
-    last_button_event = event_type
-    last_button_event_time = time.time()
-    # Note: Don't log here as it interferes with screen clearing display
-    # The event info is shown in the formatted display instead
+def make_button_callback(event_type: str):
+    """Create a callback function for a specific button event type"""
+    def callback():
+        global last_button_event, last_button_event_time
+        button_events[event_type] += 1
+        last_button_event = event_type
+        last_button_event_time = time.time()
+        # Print to stderr for immediate feedback (won't be cleared by screen refresh)
+        total = sum(button_events.values())
+        sys.stderr.write(f"\r\033[K🔘 Button: {event_type} (total: {total})\n")
+        sys.stderr.flush()
+    return callback
 
 
 def signal_handler(sig, frame):
@@ -126,8 +129,9 @@ def print_gripper_data(
     
     print("└" + "─" * 69)
     
-    # Button Events Section (if callback test is enabled)
-    if args and not args.no_callback:
+    # Button Events Section (enabled by default, disabled with --no-callback)
+    show_callback = args is None or not getattr(args, 'no_callback', False)
+    if show_callback:
         print("")
         print("┌─ 🔘 Button Events ─────────────────────────────────────────────────")
         
@@ -148,8 +152,9 @@ def print_gripper_data(
         
         print("└" + "─" * 69)
     
-    # Interactive Mode Section
-    if args and not args.no_interactive:
+    # Interactive Mode Section (enabled by default, disabled with --no-interactive)
+    show_interactive = args is None or not getattr(args, 'no_interactive', False)
+    if show_interactive:
         print("")
         print("┌─ ⌨️  Commands ─────────────────────────────────────────────────────")
         print("│  [o]pen  [c]lose  [s]top  [0-85] move to position  [q]uit")
@@ -438,7 +443,8 @@ Button callback events (enabled by default):
         # Available event types: CLICK, DOUBLE_CLICK, LONG_PRESS, PRESS, RELEASE
         event_types = ["PRESS", "RELEASE", "CLICK", "DOUBLE_CLICK", "LONG_PRESS"]
         for event_type in event_types:
-            flare.register_button_callback(event_type, button_callback)
+            # Use closure to capture event_type for each callback
+            flare.register_button_callback(event_type, make_button_callback(event_type))
         logger.info(f"Button callbacks registered for: {', '.join(event_types)}")
         logger.info("Press the gripper button to test callbacks!")
 
