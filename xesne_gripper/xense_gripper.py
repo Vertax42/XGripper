@@ -483,7 +483,7 @@ class FlareGrip:
             try:
                 gripper_status = self._fg_gripper.get_gripper_status()
                 if gripper_status is not None:
-                    data["gripper_position"] = gripper_status.get("position")
+                    data["gripper_position"] = gripper_status.get("position") - 85
                     data["gripper_velocity"] = gripper_status.get("velocity")
                 else:
                     self.logger.debug("Gripper status returned None")
