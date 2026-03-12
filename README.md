@@ -4,15 +4,14 @@ XGripper is a Python package for controlling Xense robotic grippers with integra
 
 ## Installation
 
-### Install libsurvive (Vive Tracking)
+### Install Vive Tracking Prerequisites
 
 ```bash
-cd ~ && git clone https://github.com/cntools/libsurvive.git
-cd libsurvive
+sudo apt update
+sudo apt install build-essential zlib1g-dev libx11-dev libusb-1.0-0-dev freeglut3-dev liblapacke-dev libopenblas-dev libatlas-base-dev cmake
+cd ~/XGripper/third_party/libsurvive
 sudo cp ./useful_files/81-vive.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo apt update && sudo apt install build-essential zlib1g-dev libx11-dev libusb-1.0-0-dev freeglut3-dev liblapacke-dev libopenblas-dev libatlas-base-dev cmake
-sudo make install -j4
 ```
 
 ### Install XGripper Package
@@ -23,7 +22,8 @@ pip install -e .
 ```
 
 The editable install now vendors the low-level `xensegripper` package directly.
-There is no separate `pip install xensegripper` step anymore.
+It also vendors `libsurvive` source under `third_party/libsurvive` and builds the bundled `pysurvive`
+runtime during installation, so there is no separate `pip install pysurvive` step.
 
 ## Hardware Setup
 

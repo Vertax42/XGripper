@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "wheel", "cmake", "ninja"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,7 +36,6 @@ dependencies = [
   "pyserial",
   "scipy",
   "xensesdk>=1.6.3",
-  "pysurvive",
   "draccus",
   "pygame",
   "rerun-sdk",
@@ -51,6 +50,16 @@ include-package-data = true # include non .py files
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+pysurvive = [
+  "*.so",
+  "*.so.*",
+  "*.dylib",
+  "*.dll",
+  "images/*",
+  "libsurvive/plugins/*",
+]
 
 # package data
 # [tool.setuptools.package-data]

@@ -206,3 +206,16 @@ checkpoints/
 models/
 weights/
 
+# Vendored libsurvive build outputs
+pysurvive/*.so
+pysurvive/*.so.*
+pysurvive/*.dylib
+pysurvive/*.dll
+pysurvive/*.lib
+pysurvive/libsurvive/
+third_party/libsurvive/build/
+third_party/libsurvive/_skbuild/
+third_party/libsurvive/attic/dave/AffineSolve
+third_party/libsurvive/attic/dave/dclapack_test
+third_party/libsurvive/tools/avr_codegen/test.elf
+third_party/libsurvive/tools/avr_codegen/test.hex
