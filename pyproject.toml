@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "xgripper"
 version = "0.0.1"
 description = "Software SDK for Xense FlareGripper"
-# readme = "README.md"  # Uncomment when README.md exists
+readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
 
@@ -29,8 +29,13 @@ classifiers = [
 keywords = ["xense robotics", "gripper", "data collection"]
 
 dependencies = [
-  "xensesdk",
-  "xensegripper",
+  "av",
+  "matplotlib",
+  "numpy",
+  "opencv-python",
+  "pyserial",
+  "scipy",
+  "xensesdk>=1.6.3",
   "pysurvive",
   "draccus",
   "pygame",
@@ -38,7 +43,9 @@ dependencies = [
   "spdlog",
 ]
 
-# [project.scripts]
+[project.scripts]
+xensegripper = "xensegripper.__main__:main"
+
 [tool.setuptools]
 include-package-data = true # include non .py files
 

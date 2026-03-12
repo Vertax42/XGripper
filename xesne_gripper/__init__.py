@@ -15,15 +15,22 @@
 # limitations under the License.
 """XGripper SDK."""
 
-from .xense_gripper import (
-    FlareGrip,
-    get_system_info,
-    print_system_info,
-)
-
 __version__ = "0.0.1"
 __all__ = [
     "FlareGrip",
     "get_system_info",
     "print_system_info",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"FlareGrip", "get_system_info", "print_system_info"}:
+        from .xense_gripper import FlareGrip, get_system_info, print_system_info
+
+        exports = {
+            "FlareGrip": FlareGrip,
+            "get_system_info": get_system_info,
+            "print_system_info": print_system_info,
+        }
+        return exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -22,6 +22,9 @@ cd ~/XGripper
 pip install -e .
 ```
 
+The editable install now vendors the low-level `xensegripper` package directly.
+There is no separate `pip install xensegripper` step anymore.
+
 ## Hardware Setup
 
 ### Vive Tracking System
