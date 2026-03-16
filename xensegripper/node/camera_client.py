@@ -5,7 +5,8 @@ import cv2
 import numpy as np
 
 import xensesdk.ezros as ezros
-from xensesdk.ezgl.functions import CircularBuffer, Filter
+from collections import deque
+from xensesdk.utils.math_utils import Filter
 
 
 class CameraNode(ezros.Node):
@@ -24,7 +25,7 @@ class CameraNode(ezros.Node):
         self.frame_size = frame_size
         self.frame_rate = frame_rate
         self.new_data_event = Event()
-        self.buffer = CircularBuffer(2)
+        self.buffer = deque([None], maxlen=2)
         self._fps = Filter(30, alpha=0.2)
         self.last_frame_time = time.time()
         self._connect()
@@ -50,7 +51,7 @@ class CameraNode(ezros.Node):
         try:
             np_bytes = np.frombuffer(packet_bytes, np.uint8)
             img_array = cv2.imdecode(np_bytes, cv2.IMREAD_COLOR)
-            self.buffer.put((img_array, time.time()))
+            self.buffer.append((img_array, time.time()))
             self.new_data_event.set()
             
             # real fps
@@ -64,7 +65,7 @@ class CameraNode(ezros.Node):
     def read(self, timeout=1):
         """读取最新一帧图像，阻塞等待直到超时, 返回 (timestamp, frame)"""
         if self.new_data_event.wait(timeout):
-            frame, time_stamp = self.buffer.get()
+            frame, time_stamp = self.buffer[-1]
             self.new_data_event.clear()
             return time_stamp, frame
         else:

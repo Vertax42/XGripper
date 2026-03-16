@@ -10,7 +10,7 @@ from queue import Queue, Empty
 
 import xensesdk.ezros as ezros
 from xensesdk.ezros import Node
-from xensesdk.ezgl.functions import CircularBuffer
+from collections import deque
 
 from .serial_device import SerialDevice
 from .utils import deprecated
@@ -100,7 +100,7 @@ class XenseSerialGripper(XenseGripper):
         self._serial_master = SerialDevice(port)
         self._active_response_enabled = False
         self._active_response_command = None
-        self._gripper_status = CircularBuffer(1)
+        self._gripper_status = deque([None], maxlen=1)
         self._button_status = Queue(maxsize=5)
         self._running = True
         self._worker = Thread(target=self._run_loop, daemon=True)
@@ -119,7 +119,7 @@ class XenseSerialGripper(XenseGripper):
                 if data[3] == ResponseType.GRIPPER_STATUS:
                     status = self._bytes_to_gripper_status(data)
                     if status is not None:
-                        self._gripper_status.put(status)
+                        self._gripper_status.append(status)
 
                 elif data[3] == ResponseType.BUTTON_EVENT:
                     status = self._bytes_to_button_status(data)
@@ -294,7 +294,7 @@ class XenseSerialGripper(XenseGripper):
         # self._serial_master.clear_rx_buf()  # NOTE: Clear receive buffer before sending command
         self._serial_master.send(data_packed)
         
-        return self._gripper_status.get()
+        return self._gripper_status[-1]
     
     def get_button_status(self):
         """每 5ms 在 gripper server node 调用一次"""
@@ -337,7 +337,7 @@ class GripperClientNode(Node):
         assert isinstance(mac_addr, str), "Device MAC must be a string"
         super().__init__(name=f"gripper_{mac_addr}*")
         self._mac_addr = mac_addr
-        self.buffer = CircularBuffer(2)
+        self.buffer = deque([None], maxlen=2)
 
         # 夹爪自启动
         if not self.service_is_ready(f"gripper_{mac_addr}"):
@@ -390,7 +390,7 @@ class GripperClientNode(Node):
             if data["button"] != ButtonEvent.NONE:
                 self.button_queue.put(data["button"])
 
-        return self.buffer.put(data)
+        self.buffer.append(data)
     
     def set_gripper_position(self, position, vmax, fmax):
         self.client.call_async("set_position", position, vmax, fmax)
@@ -604,7 +604,7 @@ class XenseTCPGripper(XenseGripper):
         while True:
             self._ctl.set_position(position, vmax, fmax)
             # Must be implemented in the driver layer
-            data_rec = self.gripper_client.buffer.get()
+            data_rec = self.gripper_client.buffer[-1]
             if data_rec is None:
                 print("pass")
                 continue
@@ -626,14 +626,14 @@ class XenseTCPGripper(XenseGripper):
         return True
 
     def get_gripper_status(self):
-        full_data = self.gripper_client.buffer.get()
+        full_data = self.gripper_client.buffer[-1]
         if full_data is not None:
             return {k: v for k, v in full_data.items() if k != 'button'}
         else:
             return None
     
     def get_button_status(self):
-        full_data = self.gripper_client.buffer.get()
+        full_data = self.gripper_client.buffer[-1]
         if full_data is not None:
             return full_data["button"]
         else:
