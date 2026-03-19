@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools", "wheel", "cmake", "ninja"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "xgripper"
 version = "0.0.1"
-description = "Software SDK for Xense FlareGripper"
+description = "Software SDK for Xense FlareGripper (serial communication only)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
@@ -26,45 +26,16 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-keywords = ["xense robotics", "gripper", "data collection"]
+keywords = ["xense robotics", "gripper", "serial"]
 
 dependencies = [
-  "av",
-  "matplotlib",
-  "numpy",
-  "opencv-python",
+  "numpy==2.2.6",
   "pyserial",
-  "scipy",
-  "xensesdk>=1.6.3",
-  "draccus",
-  "pygame",
-  "rerun-sdk",
   "spdlog",
 ]
 
-[project.scripts]
-xensegripper = "xensegripper.__main__:main"
-
 [tool.setuptools]
-include-package-data = true # include non .py files
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-
-[tool.setuptools.package-data]
-pysurvive = [
-  "*.so",
-  "*.so.*",
-  "*.dylib",
-  "*.dll",
-  "images/*",
-  "libsurvive/plugins/*",
-]
-
-# package data
-# [tool.setuptools.package-data]
-# xgripper = ["assets/**"]
-
-# include non .py files
-# [tool.setuptools.include-package-data]
-# include-package-data = true

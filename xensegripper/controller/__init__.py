@@ -1,1 +1,1 @@
-from .safe_close_control_speed import SafeCtlImpl
+# controller package - safe close control removed (depended on xensesdk Sensor)

@@ -1,5 +1,5 @@
 # XGripper
-# 0, 0, 0.16, 0.207, 0.676, 0.676, -0.207
+
 XGripper is a Python package for controlling Xense robotic grippers with integrated Vive Tracker support for spatial tracking.
 
 ## Installation
@@ -49,10 +49,10 @@ runtime during installation, so there is no separate `pip install pysurvive` ste
 
 ## Hardware Specifications
 
-| Component | Max Update Rate | Latency | Notes |
-|-----------|----------------|---------|-------|
-| **Vive Tracker** | 100 Hz | ~0.02ms | Non-blocking read from cache |
-| **Tactile Sensor** | ~33 Hz (single) | ~30ms | Blocking call, ~16 Hz for 2 sensors in serial |
+| Component          | Max Update Rate | Latency | Notes                                         |
+| ------------------ | --------------- | ------- | --------------------------------------------- |
+| **Vive Tracker**   | 100 Hz          | ~0.02ms | Non-blocking read from cache                  |
+| **Tactile Sensor** | ~33 Hz (single) | ~30ms   | Blocking call, ~16 Hz for 2 sensors in serial |
 
 ## Example Scripts
 
@@ -69,6 +69,7 @@ python examples/test_lighthouse.py
 ```
 
 **Output:**
+
 ```
 Detected Lighthouses: ['LH0', 'LH1']
 Trackers: ['WM0', 'WM1']
@@ -88,6 +89,7 @@ python examples/vive_print_example.py --rate 5
 ```
 
 **Output:**
+
 ```
 ======================================================================
   Vive Tracker Pose Data (Update #42)
@@ -118,12 +120,13 @@ python examples/calibrate_vive.py --origin lh0 --timeout 120
 
 **Origin Modes:**
 
-| Mode | Origin | Coordinate System | Use Case |
-|------|--------|------------------|----------|
-| `--origin tracker` | Tracker position during calibration | LH0 on +Y axis | Robot-centric applications |
-| `--origin lh0` | Lighthouse 0 (LH0) position | LH0 looks in +X direction | Fixed room/scene applications |
+| Mode               | Origin                              | Coordinate System         | Use Case                      |
+| ------------------ | ----------------------------------- | ------------------------- | ----------------------------- |
+| `--origin tracker` | Tracker position during calibration | LH0 on +Y axis            | Robot-centric applications    |
+| `--origin lh0`     | Lighthouse 0 (LH0) position         | LH0 looks in +X direction | Fixed room/scene applications |
 
 **Instructions:**
+
 1. Ensure all base stations are powered on (green LED)
 2. Place tracker(s) with clear line of sight to lighthouses
 3. Keep tracker(s) stationary during calibration
@@ -196,6 +199,7 @@ python examples/rerun_visualization_example.py --mac YOUR_MAC_ADDRESS
 After calibration, the configuration is saved to `~/.config/libsurvive/config.json`.
 
 **Example with `--origin lh0`:**
+
 ```json
 "lighthouse0": {
     "pose": ["0.000000", "0.000000", "0.000000", ...],  // LH0 at origin (0,0,0)
@@ -206,6 +210,7 @@ After calibration, the configuration is saved to `~/.config/libsurvive/config.js
 ```
 
 **Example with `--origin tracker` (default):**
+
 ```json
 "lighthouse0": {
     "pose": ["0.000000", "1.406", "0.683", ...],  // LH0 relative to tracker
@@ -250,7 +255,7 @@ With --origin tracker (default):
 
 ### Only Lighthouses Detected
 
-Trackers (WM*) only appear after receiving pose data. Wait a few seconds and ensure tracker is visible to base stations.
+Trackers (WM\*) only appear after receiving pose data. Wait a few seconds and ensure tracker is visible to base stations.
 
 ### Base Station Not Detected
 

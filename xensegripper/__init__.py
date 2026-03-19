@@ -4,16 +4,11 @@ BASE_DIR = Path(__file__).resolve().parent
 
 from ._version import __version__
 
-__all__ = ["BASE_DIR", "XenseCamera", "XenseGripper", "__version__"]
+__all__ = ["BASE_DIR", "XenseGripper", "XenseSerialGripper", "__version__"]
 
 
 def __getattr__(name: str):
-    if name == "XenseGripper":
-        from .xense_gripper import XenseGripper
-
-        return XenseGripper
-    if name == "XenseCamera":
-        from .node.camera_client import CameraNode as XenseCamera
-
-        return XenseCamera
+    if name in ("XenseGripper", "XenseSerialGripper"):
+        from .xense_gripper import XenseGripper, XenseSerialGripper
+        return {"XenseGripper": XenseGripper, "XenseSerialGripper": XenseSerialGripper}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
