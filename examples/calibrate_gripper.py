@@ -16,41 +16,34 @@
 
 """
 Gripper Calibration Script
+
+Usage:
+    python examples/calibrate_gripper.py --port /dev/ttyUSB0
 """
 
 import sys
+import time
+import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import argparse  # noqa: E402
-
-from xesne_gripper import FlareGrip  # noqa: E402
+from xensegripper import XenseSerialGripper  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description="Gripper Calibration Script")
-    parser.add_argument(
-        "--mac",
-        type=str,
-        default="6ebbc5f53240",
-        help="MAC address of the FlareGrip device",
-    )
+    parser.add_argument("--port", type=str, default="/dev/ttyUSB0",
+                        help="Serial port path (default: /dev/ttyUSB0)")
     args = parser.parse_args()
 
     print("=" * 50)
     print("Gripper Calibration")
     print("=" * 50)
 
-    print(f"\nInitializing FlareGrip (MAC: {args.mac})...")
-    flare = FlareGrip(
-        mac_addr=args.mac,
-        log_level="INFO",
-        no_sensor=True,
-        no_vive=True,
-        no_cam=True,
-    )
-    print("FlareGrip initialized!")
+    print(f"\nInitializing gripper on port: {args.port}...")
+    gripper = XenseSerialGripper(args.port)
+    print("Gripper initialized!")
 
     try:
         print("\nPlease ensure the gripper is in a safe position.")
@@ -58,13 +51,14 @@ def main():
         input("\nPress Enter to start calibration...")
 
         print("\nCalibrating gripper...")
-        flare.calibrate_gripper()
+        gripper.calibrate()
+        time.sleep(3)
         print("\nGripper calibration complete!")
 
     except KeyboardInterrupt:
         print("\n\nCalibration cancelled.")
     finally:
-        flare.close()
+        gripper.release()
 
 
 if __name__ == "__main__":
