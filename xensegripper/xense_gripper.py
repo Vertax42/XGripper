@@ -8,13 +8,55 @@ from abc import ABC, abstractmethod
 from threading import Thread
 from queue import Queue, Empty
 
-import xensesdk.ezros as ezros
-from xensesdk.ezros import Node
+# ezros is only required for XenseTCPGripper (network/FlareGrip path).
+# XenseSerialGripper works without it.
+try:
+    import xensesdk.ezros as ezros
+    from xensesdk.ezros import Node
+    _EZROS_AVAILABLE = True
+except ImportError:
+    _EZROS_AVAILABLE = False
+    ezros = None
+    Node = object  # fallback base so GripperClientNode class body is parseable
+
 from collections import deque
 
 from .serial_device import SerialDevice
 from .utils import deprecated
 from .controller import SafeCtlImpl
+
+
+class CircularBuffer:
+    """简单的循环缓冲区实现"""
+
+    def __init__(self, size):
+        self.size = size
+        self.buffer = [None] * size
+        self.head = 0
+        self.tail = 0
+        self.count = 0
+
+    def put(self, item):
+        self.buffer[self.head] = item
+        self.head = (self.head + 1) % self.size
+        if self.count < self.size:
+            self.count += 1
+        else:
+            self.tail = (self.tail + 1) % self.size
+
+    def get(self):
+        if self.count == 0:
+            return None
+        item = self.buffer[self.tail]
+        self.tail = (self.tail + 1) % self.size
+        self.count -= 1
+        return item
+
+    def is_empty(self):
+        return self.count == 0
+
+    def is_full(self):
+        return self.count == self.size
 
 
 class ControlMode(IntEnum):
@@ -25,22 +67,25 @@ class ControlMode(IntEnum):
 class Command(IntEnum):
     POSITION_CONTROL    = 0XA4
     GRIPPER_STATUS      = 0X9C
-    CALIBRATE           = 0X21
+    CALIBRATE           = 0X20      # 标定
+    CALIBRATE_ENCODER   = 0X21      # 编码器标定
     ACTIVE_RESPONSE     = 0XB6
     WRITE_WS2812B       = 0XA5      # 设置LED灯颜色
     SPEED_CONTROL       = 0XC3      # 速度闭环
+    STOP_MOTOR          = 0X81      # 停止电机
 
 class ResponseType(IntEnum):
-    GRIPPER_STATUS = 0x9c
-    BUTTON_EVENT = 0xB8
+    GRIPPER_STATUS   = 0x9c
+    BUTTON_EVENT     = 0xB8
+    CALIBRATE_STATUS = 0x20
 
 class ButtonEvent(IntEnum):
-    RELEASE = 0x00
-    PRESS = 0x01
-    CLICK = 0x02
+    RELEASE      = 0x00
+    PRESS        = 0x01
+    CLICK        = 0x02
     DOUBLE_CLICK = 0x03
-    LONG_PRESS = 0x04
-    NONE = 0x08
+    LONG_PRESS   = 0x04
+    NONE         = 0x08
 
 
 class XenseGripper(ABC):
@@ -48,69 +93,81 @@ class XenseGripper(ABC):
     ControlMode = ControlMode
 
     @abstractmethod
-    def set_position(self, position: float, vmax: float , fmax: float):
+    def set_position(self, position: float, vmax: float, fmax: float):
         pass
-    
+
     @abstractmethod
-    def set_position_sync(self, position: float, vmax: float, fmax: float, 
-                           tolerance: float = 0.01, timeout: float = 5.0, 
-                           poll_interval: float = 0.05):
+    def set_position_sync(self, position: float, vmax: float, fmax: float,
+                          tolerance: float = 0.01, timeout: float = 5.0,
+                          poll_interval: float = 0.05):
         pass
 
     @abstractmethod
     def get_gripper_status(self):
         pass
-    
+
     @classmethod
     def create(cls, mac_addr=None, **kwargs) -> Union["XenseTCPGripper", "XenseSerialGripper"]:
         """
-        创建一个 XenseGripper 实例，自动选择通信方式（串口或 TCP/IP）
-
-        根据传入参数自动决定使用串口实现（`XenseSerialGripper`）或
-        网络实现（`XenseTCPGripper`）创建一个夹爪实例。
+        创建一个 XenseGripper 实例，自动选择通信方式。
 
         Args:
-            mac_addr (str, optional): 如果提供 IP 地址，则使用 TCP 连接到远程夹爪。
-                                        否则使用本地串口连接。
-            **kwargs: 额外参数（如 `port`），仅在串口连接时使用。
+            mac_addr (str, optional): FlareGrip 设备 MAC 地址，使用 ezros 网络通信。
+                                      若为 None，则使用串口直连（需提供 ``port`` kwarg）。
+            **kwargs: 串口参数，如 ``port``、``baudrate``、``timeout``（仅串口模式使用）。
 
         Returns:
-            XenseGripper: 实现 `Gripper` 接口的夹爪实例，具体为串口或 TCP 实现。
+            XenseTCPGripper  — 当 mac_addr 不为 None 时（需安装 xensesdk）
+            XenseSerialGripper — 当提供 port 时（仅需 pyserial）
         """
         if mac_addr is not None:
             return XenseTCPGripper(mac_addr)
         else:
-            return XenseSerialGripper(kwargs["port"])
-    
+            return XenseSerialGripper(kwargs["port"],
+                                      baudrate=kwargs.get("baudrate", 115200),
+                                      timeout=kwargs.get("timeout", 1.0))
+
     @abstractmethod
     def release(self):
-        """
-        释放资源
-        """
+        """释放资源"""
         pass
 
 
 class XenseSerialGripper(XenseGripper):
-    """
-    Direct communication with gripper
-    """
-    def __init__(self, port, device_id = 1):
+    """纯串口直连夹爪驱动，不依赖 ezros / xensesdk。"""
+
+    def __init__(self, port, device_id=1, baudrate=115200, timeout=1.0):
         self._port = port
         self._device_id = device_id
-        self._serial_master = SerialDevice(port)
+        self._serial_master = SerialDevice(port, baudrate=baudrate, timeout=timeout)
         self._active_response_enabled = False
         self._active_response_command = None
-        self._gripper_status = deque([None], maxlen=1)
+        self._gripper_status = CircularBuffer(1)
         self._button_status = Queue(maxsize=5)
+        self._calibrate_status = CircularBuffer(1)
         self._running = True
         self._worker = Thread(target=self._run_loop, daemon=True)
         self._worker.start()
-    
-    def _bytes_to_button_status(self, res_bytes):
-        if len(res_bytes) == 13:
-            return res_bytes[5]
-        else:
-            return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
+
+    def __del__(self):
+        # 仅标记停止，避免串口已关闭时产生异常
+        self._running = False
+
+    def release(self):
+        self._running = False
+        if self._worker and self._worker.is_alive():
+            self._worker.join(timeout=1.0)
+        if self._serial_master:
+            self._serial_master.close()
+
+    # ── receive loop ──────────────────────────────────────────────────────────
 
     def _run_loop(self):
         while self._running:
@@ -119,221 +176,214 @@ class XenseSerialGripper(XenseGripper):
                 if data[3] == ResponseType.GRIPPER_STATUS:
                     status = self._bytes_to_gripper_status(data)
                     if status is not None:
-                        self._gripper_status.append(status)
-
+                        self._gripper_status.put(status)
                 elif data[3] == ResponseType.BUTTON_EVENT:
                     status = self._bytes_to_button_status(data)
                     if status is not None:
                         self._button_status.put(ButtonEvent(status))
-                
-    def __del__(self):
-        self.set_speed(0)
-        self.release()
-    
-    def release(self):
-        self._serial_master.close()
-    
-    def set_position(self, position, vmax=80.0, fmax=27.0):
-        """
-        Set the target position of the Gripper.
-
-        Args:
-            position (float): Target position of the gripper in millimeters (mm). 
-                              Must be in the range (0, 85). 
-                              0 mm means fully open, 85 mm means fully closed.
-            vmax (float, optional): Maximum speed of motion in mm/s. 
-                                    Must be in the range (0, 350). 
-                                    Default is 80 mm/s.
-            fmax (float, optional): Maximum output force in Newtons (N). 
-                                    Must be in the range (0, 60). 
-                                    Default is 27 N.
-
-        Raises:
-            ValueError: If any of the input arguments are outside their allowed physical limits.
-
-        """
-        if not 0 <= vmax <= 350:
-            raise ValueError(f"vmax {vmax} out of range, please input value in 0~350(mm/s)")
-        if not 0 <= fmax <= 60:
-            raise ValueError(f"fmax {fmax} out of range, please input value in 0~60(N)")
-        if not 0 <= position <= 85:
-            raise ValueError(f"vmax {position} out of range, please input value in 0~85(mm)")
-        position = 85 - position # reverse user control
-        vmax /= 0.1      # (0.1mm/s)/LSB, 设置区间0-200mm/s
-        fmax /= 0.01     # 0.01N/LSB, 设置区间0-60N
-        position /= 0.01 # 0.01mm/LSB，即1000代表10mm, 设置区间0-85mm, 0 代表闭合， 85 代表张开
-        command = Command.POSITION_CONTROL.to_bytes(1, 'little')
-        force_max_bytes  = int(fmax).to_bytes(2, 'little')
-        v_max_bytes = int(vmax).to_bytes(2, 'little')
-        position_bytes  = int(position).to_bytes(2, 'little')
-        data_bytes = command + (0).to_bytes(1, 'little') + force_max_bytes + v_max_bytes + position_bytes
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        self._serial_master.send(data_packed)
-
-    def set_speed(self, vmax, fmax=27):
-        """
-        速度闭环控制
-        fmax: 最大推力 (N)，范围 [0, 60]
-        vmax: 目标速度 (mm/s)，范围 [0, 440]
-        """
-        if not -440 <= vmax <= 440:  # 预留负速度（如果固件支持）
-            raise ValueError(f"vmax {vmax} out of range, please input value in -440~440 (mm/s)")
-        if not 0 <= fmax <= 60:
-            raise ValueError(f"fmax {fmax} out of range, please input value in 0~60 (N)")
-
-        # 单位换算
-        fmax /= 0.01   # 0.01N / LSB
-        vmax /= 0.1    # 0.1mm/s / LSB
-
-        command = Command.SPEED_CONTROL.to_bytes(1, 'little')
-        force_max_bytes = int(fmax).to_bytes(2, 'little', signed=False)
-        v_max_bytes     = int(vmax).to_bytes(2, 'little', signed=True)
-
-        # ➕ 补齐 2 字节 padding，使总长度 = 8
-        data_bytes = command + (0).to_bytes(1, 'little') + force_max_bytes + v_max_bytes + (0).to_bytes(2, 'little')
-
-        assert len(data_bytes) == 8
-
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        self._serial_master.send(data_packed)
-    
-    def set_position_sync(self, position, vmax, fmax, tolerance = 0.01, timeout = 5, poll_interval = 0.05):
-        """
-        Move the gripper to a target position and block until the target is reached or timeout occurs.
-
-        Parameters:
-            position (float): Target position of the gripper in millimeters (mm).
-                            Must be in the range (0, 85). 
-                            0 mm means fully open, 85 mm means fully closed.
-            vmax (float): Maximum speed of motion in mm/s.
-                        Must be in the range (0, 350).
-                        Default is 80 mm/s.
-            fmax (float): Maximum output force in Newtons (N).
-                        Must be in the range (0, 60).
-                        Default is 27 N.
-            tolerance (float, optional): Allowed position error in mm to consider motion complete.
-                                        Default is 0.01 mm.
-            timeout (float, optional): Maximum time in seconds to wait for the target to be reached.
-                                        Default is 5.0 seconds.
-            poll_interval (float, optional): Time interval in seconds between position checks.
-                                            Default is 0.05 seconds.
-        """
-        self.set_position(position, vmax, fmax)
-
-        start_time = time.time()
-
-        while True:
-            current_pos = self.get_gripper_status()["position"]  # Must be implemented in the driver layer
-
-            # Check if position is within the tolerance
-            if abs(current_pos - position) <= tolerance:
-                break
-
-            # Timeout check
-            if (time.time() - start_time) > timeout:
-                raise TimeoutError(
-                    f"Gripper did not reach target position {position} mm "
-                    f"within {timeout} seconds. Last position: {current_pos:.3f} mm"
-                )
-
-            time.sleep(poll_interval)
-        return 
-
-    def set_led_color(self, R, G, B):
-        """
-        设置 WS2812B 灯颜色
-        参数 G, R, B：绿色、红色、蓝色亮度值，范围 0~255
-        """
-        if not (0 <= G <= 255 and 0 <= R <= 255 and 0 <= B <= 255):
-            raise ValueError("RGB 颜色值必须在 0~255 范围内")
-        
-        command = Command.WRITE_WS2812B.to_bytes(1, 'little')
-        g_byte = G.to_bytes(1, 'little')
-        r_byte = R.to_bytes(1, 'little')
-        b_byte = B.to_bytes(1, 'little')
-        reserved = (0).to_bytes(1, 'little') * 4  # 补足到 8 字节
-        
-        data_bytes = command + g_byte + r_byte + b_byte + reserved
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        self._serial_master.send(data_packed)
+                elif data[3] == ResponseType.CALIBRATE_STATUS:
+                    status = self._bytes_to_calibrate_status(data)
+                    if status is not None:
+                        self._calibrate_status.put(status)
 
     def _bytes_to_gripper_status(self, res_bytes):
         if len(res_bytes) == 13:
-            # Byte 4: motor temperature (int8_t), in °C (1°C/LSB)
             temperature = res_bytes[4]
-
-            # Bytes 5-6: gripper output force (int16_t), scaled by 0.01 N/LSB
-            force = struct.unpack('<h', res_bytes[5:7])[0] * 0.01
-
-            # Bytes 7-8: gripper speed (int16_t), scaled by 0.1 mm/s/LSB
-            vel = struct.unpack('<h', res_bytes[7:9])[0] * 0.1
-
-            # Bytes 9-10: gripper position (int16_t), scaled by 0.01 mm/LSB
-            position = struct.unpack('<h', res_bytes[9:11])[0] * 0.01
-            # print(f"position: {position} mm, velocity: {vel} mm/s, force: {force} N, temperature: {temperature} °C")
-            gripper_status = {
-                'position': 85-position,
-                'velocity': vel,
-                'force': force,
-                'temperature': temperature
+            force    = struct.unpack('<h', res_bytes[5:7])[0] * 0.01
+            vel      = struct.unpack('<h', res_bytes[7:9])[0] * 0.1
+            raw_pos  = struct.unpack('<h', res_bytes[9:11])[0] * 0.01
+            position = max(0.0, min(85.0, raw_pos))
+            return {
+                'position':    85.0 - position,
+                'velocity':    vel,
+                'force':       force,
+                'temperature': temperature,
             }
-            return gripper_status
-        else:
-            return None
+        return None
 
-    def get_gripper_status(self):
-        """Retrieve the gripper status, including motor temperature, output force, speed, and position.
+    def _bytes_to_button_status(self, res_bytes):
+        if len(res_bytes) == 13:
+            return res_bytes[5]
+        return None
+
+    def _bytes_to_calibrate_status(self, res_bytes):
+        if len(res_bytes) == 13:
+            status = 'done' if res_bytes[4] == 0x20 else 'run'
+            return {'status': status}
+        return None
+
+    # ── motion control ────────────────────────────────────────────────────────
+
+    def set_position(self, position, vmax=80.0, fmax=27.0):
+        """
+        设置夹爪目标位置。
+
+        Args:
+            position: 目标位置 (mm)，范围 [0, 85]。0 = 完全张开，85 = 完全闭合。
+            vmax:     最大速度 (mm/s)，范围 [0, 350]，默认 80。
+            fmax:     最大力 (N)，范围 [0, 60]，默认 27。
+        """
+        if not 0 <= vmax <= 350:
+            raise ValueError(f"vmax {vmax} out of range [0, 350] mm/s")
+        if not 0 <= fmax <= 60:
+            raise ValueError(f"fmax {fmax} out of range [0, 60] N")
+        if not 0 <= position <= 85:
+            raise ValueError(f"position {position} out of range [0, 85] mm")
+        raw_pos = 85 - position
+        vmax    /= 0.1
+        fmax    /= 0.01
+        raw_pos /= 0.01
+        data_bytes = (Command.POSITION_CONTROL.to_bytes(1, 'little')
+                      + (0).to_bytes(1, 'little')
+                      + int(fmax).to_bytes(2, 'little')
+                      + int(vmax).to_bytes(2, 'little')
+                      + int(raw_pos).to_bytes(2, 'little'))
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+
+    def open_gripper(self, vmax=80.0, fmax=27.0):
+        """完全张开（用户坐标 0 mm）。"""
+        self.set_position(85.0, vmax=vmax, fmax=fmax)
+
+    def close_gripper(self, vmax=80.0, fmax=27.0):
+        """完全闭合（用户坐标 85 mm）。"""
+        self.set_position(0.0, vmax=vmax, fmax=fmax)
+
+    def set_speed(self, vmax, fmax=27):
+        """
+        速度闭环控制。
+
+        Args:
+            vmax: 目标速度 (mm/s)，范围 [-440, 440]。
+            fmax: 最大推力 (N)，范围 [0, 60]，默认 27。
+        """
+        if not -440 <= vmax <= 440:
+            raise ValueError(f"vmax {vmax} out of range [-440, 440] mm/s")
+        if not 0 <= fmax <= 60:
+            raise ValueError(f"fmax {fmax} out of range [0, 60] N")
+        fmax /= 0.01
+        vmax /= 0.1
+        data_bytes = (Command.SPEED_CONTROL.to_bytes(1, 'little')
+                      + (0).to_bytes(1, 'little')
+                      + int(fmax).to_bytes(2, 'little', signed=False)
+                      + int(vmax).to_bytes(2, 'little', signed=True)
+                      + (0).to_bytes(2, 'little'))
+        assert len(data_bytes) == 8
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+
+    def stop(self):
+        """立即停止电机。"""
+        data_bytes = Command.STOP_MOTOR.to_bytes(1, 'little') + (0).to_bytes(1, 'little') * 7
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+        return 0
+
+    def set_position_sync(self, position, vmax, fmax, tolerance=0.01, timeout=5.0, poll_interval=0.05):
+        """
+        发送位置指令并阻塞直到到达目标位置或超时。
+
+        Args:
+            position:      目标位置 (mm)，[0, 85]。
+            vmax:          最大速度 (mm/s)。
+            fmax:          最大力 (N)。
+            tolerance:     位置容差 (mm)，默认 0.01。
+            timeout:       超时时间 (s)，默认 5.0。
+            poll_interval: 轮询间隔 (s)，默认 0.05。
+        """
+        self.set_position(position, vmax, fmax)
+        start_time = time.time()
+        while True:
+            status = self.get_gripper_status()
+            if status is not None and abs(status["position"] - position) <= tolerance:
+                break
+            if (time.time() - start_time) > timeout:
+                current = status["position"] if status else float("nan")
+                raise TimeoutError(
+                    f"Gripper did not reach {position} mm within {timeout} s. "
+                    f"Last position: {current:.3f} mm"
+                )
+            time.sleep(poll_interval)
+
+    # ── LED ──────────────────────────────────────────────────────────────────
+
+    def set_led_color(self, R, G, B):
+        """设置 WS2812B 灯颜色（R/G/B 各 0~255）。"""
+        if not (0 <= R <= 255 and 0 <= G <= 255 and 0 <= B <= 255):
+            raise ValueError("RGB values must be in 0~255")
+        data_bytes = (Command.WRITE_WS2812B.to_bytes(1, 'little')
+                      + G.to_bytes(1, 'little')
+                      + R.to_bytes(1, 'little')
+                      + B.to_bytes(1, 'little')
+                      + (0).to_bytes(1, 'little') * 4)
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+
+    # ── status queries ────────────────────────────────────────────────────────
+
+    def get_gripper_status(self, timeout=None):
+        """
+        查询夹爪状态（位置/速度/力/温度）。
+
+        Args:
+            timeout: 若设置，等待最多 timeout 秒收到回包；否则立即返回缓存值。
 
         Returns:
-            dict: gripper status including: position, velocity, force and temperature 
+            dict | None: {'position', 'velocity', 'force', 'temperature'} 或 None。
         """
-        # send command 
-        command = Command.GRIPPER_STATUS.to_bytes(1, 'little')
-        data_bytes = command + (0).to_bytes(1, 'little')*7
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        # self._serial_master.clear_rx_buf()  # NOTE: Clear receive buffer before sending command
-        self._serial_master.send(data_packed)
-        
-        return self._gripper_status[-1]
-    
+        data_bytes = Command.GRIPPER_STATUS.to_bytes(1, 'little') + (0).to_bytes(1, 'little') * 7
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+        if timeout is None:
+            return self._gripper_status.get()
+        deadline = time.time() + timeout
+        poll = min(0.05, timeout / 10) if timeout > 0 else 0.05
+        while time.time() < deadline:
+            status = self._gripper_status.get()
+            if status is not None:
+                return status
+            time.sleep(poll)
+        return self._gripper_status.get()
+
     def get_button_status(self):
-        """每 5ms 在 gripper server node 调用一次"""
         try:
-            ret = self._button_status.get(block=False)
+            return self._button_status.get(block=False)
         except Empty:
             return ButtonEvent.NONE
-        return ret
 
-    # @deprecated("Currently useless, may be removed in future")
+    def get_calibrate_status(self):
+        return self._calibrate_status.get()
+
+    # ── calibration ───────────────────────────────────────────────────────────
+
     def calibrate(self):
-        ##NOTE: Just reset gripper please
-        command = Command.CALIBRATE.to_bytes(1, 'little')
-        data_bytes = command + (0).to_bytes(1, 'little')*7
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        self._serial_master.send(data_packed)
+        """触发夹爪标定。"""
+        data_bytes = Command.CALIBRATE.to_bytes(1, 'little') + (0).to_bytes(1, 'little') * 7
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
         return 0
-    
+
+    def calibrate_encoder(self):
+        """触发编码器标定。"""
+        data_bytes = Command.CALIBRATE_ENCODER.to_bytes(1, 'little') + (0).to_bytes(1, 'little') * 7
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
+        return 0
+
     @deprecated("Buggy, will remove in future")
     def set_active_response(self, enable=True, period=10):
-        ##BUG: Do not use, cause reading delay 
+        # BUG: Do not use, causes reading delay
         self._active_response_enabled = enable
         self._active_response_command = Command.GRIPPER_STATUS
-
-        command = Command.ACTIVE_RESPONSE.to_bytes(1, 'little')
-        response_type = Command.GRIPPER_STATUS.to_bytes(1, 'little')
-        enable = int(enable).to_bytes(1, 'little')
-        period = int(period).to_bytes(2, 'little') # ms
-        data_bytes = command + response_type + enable + period + (0).to_bytes(1, 'little')*3
-        data_packed = self._serial_master.build_packet(self._device_id, data_bytes)
-        self._serial_master.send(data_packed)
+        data_bytes = (Command.ACTIVE_RESPONSE.to_bytes(1, 'little')
+                      + Command.GRIPPER_STATUS.to_bytes(1, 'little')
+                      + int(enable).to_bytes(1, 'little')
+                      + int(period).to_bytes(2, 'little')
+                      + (0).to_bytes(1, 'little') * 3)
+        self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
 
 
 class GripperClientNode(Node):
-    
-    def __init__(
-        self,
-        mac_addr
-    ):
+
+    def __init__(self, mac_addr):
+        if not _EZROS_AVAILABLE:
+            raise ImportError(
+                "xensesdk (ezros) is required for XenseTCPGripper. "
+                "For serial-only usage call XenseGripper.create(port='/dev/ttyUSB0') instead."
+            )
         assert isinstance(mac_addr, str), "Device MAC must be a string"
         super().__init__(name=f"gripper_{mac_addr}*")
         self._mac_addr = mac_addr
@@ -341,7 +391,7 @@ class GripperClientNode(Node):
 
         # 夹爪自启动
         if not self.service_is_ready(f"gripper_{mac_addr}"):
-            self.logger.info(f"Gripper not started, starting now...")
+            self.logger.info("Gripper not started, starting now...")
             ret = self.call_service(f"master_{mac_addr}", "launch_gripper")
             if ret is None:
                 raise Exception(f"Failed to launch gripper_{mac_addr}")
@@ -349,7 +399,7 @@ class GripperClientNode(Node):
         self.client = self.create_client(f"gripper_{mac_addr}", timeout=8, interval=0.1, quiet=True)
         if self.client is None:
             self.logger.error(f"Failed to create client for gripper {mac_addr}")
-            
+
         self.subscriber = self.create_subscriber(ezros.BytesMessage, f"gripper_{mac_addr}", self.on_fetch_data, 1)
         self.publisher = self.create_publisher(ezros.BytesMessage, f"gripper_control_{mac_addr}", 1)
 
@@ -359,11 +409,11 @@ class GripperClientNode(Node):
 
     def register_button_callback(self, event_type: ButtonEvent, callback):
         """
-        注册按钮事件回调函数
+        注册按钮事件回调。
 
         Args:
-            event_type (ButtonEvent): 事件类型，支持 "CLICK", "DOUBLE_CLICK", "LONG_PRESS", "PRESS", "RELEASE"
-            callback (function): 回调函数，接受一个参数，表示按钮状态
+            event_type: ButtonEvent 枚举值。
+            callback:   无参回调函数。
         """
         self.button_callbacks[event_type] = callback
         if self.button_thread is None:
@@ -378,20 +428,18 @@ class GripperClientNode(Node):
             if key == "QUIT":
                 break
             time.sleep(0.01)
-    
+
     def shutdown(self):
         self.button_queue.put("QUIT")
         super().shutdown()
-        
+
     def on_fetch_data(self, msg):
         data = msg.get_data()
-        
         if isinstance(data, dict) and "button" in data:
             if data["button"] != ButtonEvent.NONE:
                 self.button_queue.put(data["button"])
-
         self.buffer.append(data)
-    
+
     def set_gripper_position(self, position, vmax, fmax):
         self.client.call_async("set_position", position, vmax, fmax)
 
@@ -400,7 +448,7 @@ class GripperClientNode(Node):
 
     def set_led_color(self, r, g, b):
         self.client.set_led_color(r, g, b)
-    
+
     def calibrate(self):
         self.client.call_async("calibrate")
 
@@ -410,17 +458,9 @@ class DirectCtl:
         self.gripper_client = gripper_client
 
     def set_position(self, position, vmax=80.0, fmax=27.0):
-        """
-        Set the target position of the Gripper.
-        """
         self.gripper_client.set_gripper_position(position, vmax, fmax)
-    
+
     def set_speed(self, velocity, fmax=27):
-        """
-        速度闭环控制
-        fmax: 最大推力 (N)，范围 [0, 60]
-        vmax: 目标速度 (mm/s)，范围 [0, 440]
-        """
         self.gripper_client.set_gripper_speed(velocity, fmax)
 
 
@@ -429,12 +469,10 @@ class SafeCtl:
         from xensesdk import Sensor
         import sys
         if serial_number is None:
-            # find sensor
             MASTER_SERVICE = f"master_{gripper_client._mac_addr}"
-            # find all sensors
             ret = gripper_client.call_service(MASTER_SERVICE, "scan_sensor_sn")
             if ret is None:
-                print(f"Failed to scan sensors")
+                print("Failed to scan sensors")
                 sys.exit(1)
             else:
                 print(f"Found sensors: {ret}, using the first one.")
@@ -442,18 +480,14 @@ class SafeCtl:
         else:
             print(f"Using provided serial number: {serial_number}")
 
-        # create a sensor
         self.gripper_client = gripper_client
         sensor = Sensor.create(serial_number, mac_addr=gripper_client._mac_addr)
         self._controller: SafeCtlImpl = SafeCtlImpl(sensor, self.gripper_client)
         self._controller.start()
 
     def set_position(self, position, vmax=80.0, fmax=27.0):
-        """
-        Set the target position of the Gripper.
-        """
         self._controller.set_target_position(position)
-    
+
     def set_speed(self, velocity, fmax=27):
         raise NotImplementedError("SafeCtl does not support speed control, use DirectCtl instead.")
 
@@ -469,9 +503,8 @@ class SafeCtl:
 
 
 class XenseTCPGripper(XenseGripper):
-    """
-    Direct communication with gripper
-    """
+    """通过 ezros 网络协议控制 FlareGrip 夹爪（需安装 xensesdk）。"""
+
     def require_mode(expected_mode: ControlMode):
         def deco(fn):
             @wraps(fn)
@@ -484,7 +517,7 @@ class XenseTCPGripper(XenseGripper):
         return deco
 
     def __init__(self, mac_addr):
-        self._mac_addr = mac_addr 
+        self._mac_addr = mac_addr
         self.gripper_client = GripperClientNode(mac_addr)
         self._ctl = DirectCtl(self.gripper_client)
         self._ctl_mode = ControlMode.POSITION
@@ -492,17 +525,15 @@ class XenseTCPGripper(XenseGripper):
 
     def register_button_callback(self, event_type: str, callback):
         assert event_type in ["CLICK", "DOUBLE_CLICK", "LONG_PRESS", "PRESS", "RELEASE"], \
-            "Invalid event type, valid types are: CLICK, DOUBLE_CLICK, LONG_PRESS, PRESS, RELEASE"
+            "Valid types: CLICK, DOUBLE_CLICK, LONG_PRESS, PRESS, RELEASE"
         self.gripper_client.register_button_callback(ButtonEvent[event_type], callback)
- 
+
     def release(self):
         self.gripper_client.shutdown()
 
     @contextmanager
     def mode(self, mode: Union[ControlMode, str], serial_number=None):
-        """
-        上下文管理器：进入时切换到 SPEED 模式，退出时自动停机并恢复原模式
-        """
+        """上下文管理器：切换控制模式，退出时自动恢复。"""
         mode = ControlMode[mode] if isinstance(mode, str) else mode
         prev_mode = self._ctl_mode
         self.enable_mode(mode, serial_number)
@@ -520,7 +551,7 @@ class XenseTCPGripper(XenseGripper):
             self._ctl = DirectCtl(self.gripper_client)
         elif mode == ControlMode.SAFE:
             self._ctl = SafeCtl(self.gripper_client, serial_number)
-    
+
     def disable_mode(self):
         if self._ctl_mode == ControlMode.SPEED:
             try:
@@ -534,35 +565,20 @@ class XenseTCPGripper(XenseGripper):
                 print("Stopped safe control")
             except Exception as e:
                 print(f"Error stopping safe control: {e}")
-        
+
     def set_position(self, position, vmax=80.0, fmax=27.0):
         """
-        Set the target position of the Gripper.
+        设置夹爪目标位置（通过 ezros）。
 
         Args:
-            position (float): Target position of the gripper in millimeters (mm). 
-                              Must be in the range (0, 85). 
-                              85 mm means fully open, 0 mm means fully closed.
-            vmax (float, optional): Maximum speed of motion in mm/s. 
-                                    Must be in the range (0, 350). 
-                                    Default is 80 mm/s.
-            fmax (float, optional): Maximum output force in Newtons (N). 
-                                    Must be in the range (0, 60). 
-                                    Default is 27 N.
-
-        Raises:
-            ValueError: If any of the input arguments are outside their allowed physical limits.
-
+            position: 目标位置 (mm)，[0, 85]。85 = 完全张开，0 = 完全闭合。
+            vmax:     最大速度 (mm/s)，[0, 350]。
+            fmax:     最大力 (N)，[0, 60]。
         """
         self._ctl.set_position(position, vmax, fmax)
-    
+
     @require_mode(ControlMode.SPEED)
     def set_speed(self, velocity, fmax=27):
-        """
-        速度闭环控制
-        fmax: 最大推力 (N)，范围 [0, 60]
-        vmax: 目标速度 (mm/s)，范围 [0, 440]
-        """
         self._ctl.set_speed(velocity, fmax)
 
     @require_mode(ControlMode.SAFE)
@@ -571,57 +587,26 @@ class XenseTCPGripper(XenseGripper):
 
     @require_mode(ControlMode.SAFE)
     def get_control_param(self):
-        return (self._ctl._controller.F_target, 
-                self._ctl._controller.pid_ctl.Kp, 
-                self._ctl._controller.pid_ctl.Ki, 
+        return (self._ctl._controller.F_target,
+                self._ctl._controller.pid_ctl.Kp,
+                self._ctl._controller.pid_ctl.Ki,
                 self._ctl._controller.pid_ctl.Kd)
 
-    def set_position_sync(self, position, vmax, fmax, tolerance = 0.01, timeout = 5, poll_interval = 0.05):
-        """
-        Move the gripper to a target position and block until the target is reached or timeout occurs.
-
-        Parameters:
-            position (float): Target position of the gripper in millimeters (mm). 
-                              Must be in the range (0, 85). 
-                              85 mm means fully open, 0 mm means fully closed.
-            vmax (float, optional): Maximum speed of motion in mm/s. 
-                                    Must be in the range (0, 350). 
-                                    Default is 80 mm/s.
-            fmax (float, optional): Maximum output force in Newtons (N). 
-                                    Must be in the range (0, 60). 
-                                    Default is 27 N.
-            tolerance (float, optional): Allowed position error in mm to consider motion complete.
-                                        Default is 0.01 mm.
-            timeout (float, optional): Maximum time in seconds to wait for the target to be reached.
-                                        Default is 5.0 seconds.
-            poll_interval (float, optional): Time interval in seconds between position checks.
-                                            Default is 0.05 seconds.
-        """
-        
-
+    def set_position_sync(self, position, vmax, fmax, tolerance=0.01, timeout=5.0, poll_interval=0.05):
         start_time = time.time()
-
         while True:
             self._ctl.set_position(position, vmax, fmax)
-            # Must be implemented in the driver layer
             data_rec = self.gripper_client.buffer[-1]
             if data_rec is None:
-                print("pass")
                 continue
-
             current_pos = data_rec["position"]
-
-            # Check if position is within the tolerance
             if abs(current_pos - position) <= tolerance:
                 break
-
-            # Timeout check
             if (time.time() - start_time) > timeout:
                 raise TimeoutError(
-                    f"Gripper did not reach target position {position} mm "
-                    f"within {timeout} seconds. Last position: {current_pos:.3f} mm"
+                    f"Gripper did not reach {position} mm within {timeout} s. "
+                    f"Last position: {current_pos:.3f} mm"
                 )
-
             time.sleep(poll_interval)
         return True
 
@@ -629,28 +614,22 @@ class XenseTCPGripper(XenseGripper):
         full_data = self.gripper_client.buffer[-1]
         if full_data is not None:
             return {k: v for k, v in full_data.items() if k != 'button'}
-        else:
-            return None
-    
+        return None
+
     def get_button_status(self):
         full_data = self.gripper_client.buffer[-1]
         if full_data is not None:
             return full_data["button"]
-        else:
-            return None
+        return None
 
-    def open_gripper(self):
-        self._ctl.set_position(85, vmax=40, fmax=27)
+    def open_gripper(self, vmax=40.0, fmax=27.0):
+        self._ctl.set_position(85, vmax=vmax, fmax=fmax)
 
-    def close_gripper(self):
-        self._ctl.set_position(0, vmax=40, fmax=27)
-    
+    def close_gripper(self, vmax=40.0, fmax=27.0):
+        self._ctl.set_position(0, vmax=vmax, fmax=fmax)
+
     def set_led_color(self, r, g, b):
-        """
-        设置 WS2812B 灯颜色
-        参数 G, R, B：绿色、红色、蓝色亮度值，范围 0~255
-        """
         self.gripper_client.set_led_color(r, g, b)
-    
+
     def calibrate(self):
         self.gripper_client.calibrate()
