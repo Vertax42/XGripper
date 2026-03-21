@@ -18,6 +18,7 @@
 __version__ = "0.0.1"
 __all__ = [
     "FlareGrip",
+    "XenseSerialGripper",
     "get_system_info",
     "print_system_info",
 ]
@@ -33,4 +34,7 @@ def __getattr__(name: str):
             "print_system_info": print_system_info,
         }
         return exports[name]
+    if name == "XenseSerialGripper":
+        from xensegripper import XenseSerialGripper
+        return XenseSerialGripper
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
