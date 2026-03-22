@@ -79,6 +79,7 @@ class Command(IntEnum):
     WRITE_WS2812B       = 0XA5      # 设置LED灯颜色
     SPEED_CONTROL       = 0XC3      # 速度闭环
     STOP_MOTOR          = 0X81      # 停止电机
+    READ_BOARD_SN       = 0XD0      # 读取板载MCU序列号
 
 class ResponseType(IntEnum):
     GRIPPER_STATUS   = 0x9c
@@ -640,3 +641,37 @@ class XenseTCPGripper(XenseGripper):
 
     def calibrate(self):
         self.gripper_client.calibrate()
+
+
+def read_board_sn(port: str, baudrate: int = 115200, device_id: int = 1, retries: int = 3) -> str | None:
+    """Read the MCU serial number from a gripper over serial port.
+
+    Sends command 0xD0 (TYPE=0x03) and reads the 6-byte ASCII SN from the response.
+
+    Args:
+        port:      Serial port path, e.g. "/dev/ttyUSB0"
+        baudrate:  Baud rate (default 115200)
+        device_id: Target device ID (default 1)
+        retries:   Number of attempts before giving up (default 3)
+
+    Returns:
+        SN string (e.g. "XG0042") or None if no response.
+    """
+    import time
+    dev = SerialDevice(port, baudrate=baudrate, timeout=0.5)
+    try:
+        time.sleep(0.05)
+        packet = dev.build_packet(device_id, bytes([Command.READ_BOARD_SN, 0x03, 0, 0, 0, 0, 0, 0]))
+        for attempt in range(retries):
+            dev.clear_rx_buf()
+            dev.send(packet)
+            dev.ser.flush()
+            time.sleep(0.08)
+            resp = dev.receive(13)
+            if resp and len(resp) == 13 and resp[3] == Command.READ_BOARD_SN and resp[4] == 0x03:
+                return resp[5:11].decode("ascii", errors="replace").rstrip("\x00") or None
+            if attempt < retries - 1:
+                time.sleep(0.1)
+    finally:
+        dev.close()
+    return None
