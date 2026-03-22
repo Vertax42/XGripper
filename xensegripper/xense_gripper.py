@@ -169,16 +169,23 @@ class XenseSerialGripper(XenseGripper):
 
     def release(self):
         self._running = False
+        if self._serial_master:
+            # Close the port first so any blocking ser.read() in _run_loop raises
+            # an exception immediately, making the thread exit without waiting for
+            # the full serial read timeout.
+            self._serial_master.close()
         if self._worker and self._worker.is_alive():
             self._worker.join(timeout=1.0)
-        if self._serial_master:
-            self._serial_master.close()
 
     # ── receive loop ──────────────────────────────────────────────────────────
 
     def _run_loop(self):
         while self._running:
-            data = self._serial_master.receive()
+            try:
+                data = self._serial_master.receive()
+            except Exception:
+                # Serial port was closed (e.g. during release()) — exit cleanly
+                break
             if data is not None:
                 if data[3] == ResponseType.GRIPPER_STATUS:
                     status = self._bytes_to_gripper_status(data)
