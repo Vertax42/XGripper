@@ -52,6 +52,12 @@ class CircularBuffer:
         self.count -= 1
         return item
 
+    def clear(self):
+        self.buffer = [None] * self.size
+        self.head = 0
+        self.tail = 0
+        self.count = 0
+
     def is_empty(self):
         return self.count == 0
 
@@ -288,6 +294,7 @@ class XenseSerialGripper(XenseGripper):
             timeout:       超时时间 (s)，默认 5.0。
             poll_interval: 轮询间隔 (s)，默认 0.05。
         """
+        # raw_position = 85 - position
         self.set_position(position, vmax, fmax)
         start_time = time.time()
         while True:
@@ -327,6 +334,7 @@ class XenseSerialGripper(XenseGripper):
         Returns:
             dict | None: {'position', 'velocity', 'force', 'temperature'} 或 None。
         """
+        self._gripper_status.clear()  # flush stale cached data before fresh request
         data_bytes = Command.GRIPPER_STATUS.to_bytes(1, 'little') + (0).to_bytes(1, 'little') * 7
         self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
         if timeout is None:
