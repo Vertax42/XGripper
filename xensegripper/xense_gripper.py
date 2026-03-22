@@ -298,7 +298,7 @@ class XenseSerialGripper(XenseGripper):
         self.set_position(position, vmax, fmax)
         start_time = time.time()
         while True:
-            status = self.get_gripper_status()
+            status = self.get_gripper_status(timeout=poll_interval)
             if status is not None and abs(status["position"] - position) <= tolerance:
                 break
             if (time.time() - start_time) > timeout:
@@ -307,7 +307,6 @@ class XenseSerialGripper(XenseGripper):
                     f"Gripper did not reach {position} mm within {timeout} s. "
                     f"Last position: {current:.3f} mm"
                 )
-            time.sleep(poll_interval)
 
     # ── LED ──────────────────────────────────────────────────────────────────
 
