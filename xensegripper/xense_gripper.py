@@ -153,6 +153,7 @@ class XenseSerialGripper(XenseGripper):
         self._button_status = Queue(maxsize=5)
         self._calibrate_status = CircularBuffer(1)
         self._running = True
+        self._receive_thread_error: str | None = None
         self._worker = Thread(target=self._run_loop, daemon=True)
         self._worker.start()
 
@@ -183,8 +184,10 @@ class XenseSerialGripper(XenseGripper):
         while self._running:
             try:
                 data = self._serial_master.receive()
-            except Exception:
+            except Exception as e:
                 # Serial port was closed (e.g. during release()) — exit cleanly
+                if self._running:
+                    self._receive_thread_error = f"{type(e).__name__}: {e}"
                 break
             if data is not None:
                 if data[3] == ResponseType.GRIPPER_STATUS:
@@ -199,6 +202,20 @@ class XenseSerialGripper(XenseGripper):
                     status = self._bytes_to_calibrate_status(data)
                     if status is not None:
                         self._calibrate_status.put(status)
+
+    def is_receive_thread_alive(self) -> bool:
+        """Return True while the background serial receive thread is alive."""
+        return self._worker is not None and self._worker.is_alive()
+
+    def get_receive_thread_failure_reason(self) -> str | None:
+        """Return a failure reason only when the receive thread is unexpectedly unhealthy."""
+        if not self._running:
+            return None
+        if self._receive_thread_error is not None:
+            return self._receive_thread_error
+        if not self.is_receive_thread_alive():
+            return "receive thread exited unexpectedly"
+        return None
 
     def _bytes_to_gripper_status(self, res_bytes):
         if len(res_bytes) == 13:
@@ -233,7 +250,7 @@ class XenseSerialGripper(XenseGripper):
         设置夹爪目标位置。
 
         Args:
-            position: 目标位置 (mm)，范围 [0, 85]。0 = 完全张开，85 = 完全闭合。
+            position: 目标位置 (mm)，范围 [0, 85]。0 = 完全闭合，85 = 完全张开。
             vmax:     最大速度 (mm/s)，范围 [0, 350]，默认 80。
             fmax:     最大力 (N)，范围 [0, 60]，默认 27。
         """
@@ -243,6 +260,8 @@ class XenseSerialGripper(XenseGripper):
             raise ValueError(f"fmax {fmax} out of range [0, 60] N")
         if not 0 <= position <= 85:
             raise ValueError(f"position {position} out of range [0, 85] mm")
+        # The MCU register uses the opposite direction of the public API:
+        # raw 0 = fully open, raw 85 = fully closed.
         raw_pos = 85 - position
         vmax    /= 0.1
         fmax    /= 0.01
@@ -255,11 +274,11 @@ class XenseSerialGripper(XenseGripper):
         self._serial_master.send(self._serial_master.build_packet(self._device_id, data_bytes))
 
     def open_gripper(self, vmax=80.0, fmax=27.0):
-        """完全张开（用户坐标 0 mm）。"""
+        """完全张开（用户坐标 85 mm）。"""
         self.set_position(85.0, vmax=vmax, fmax=fmax)
 
     def close_gripper(self, vmax=80.0, fmax=27.0):
-        """完全闭合（用户坐标 85 mm）。"""
+        """完全闭合（用户坐标 0 mm）。"""
         self.set_position(0.0, vmax=vmax, fmax=fmax)
 
     def set_speed(self, vmax, fmax=27):
