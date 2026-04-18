@@ -1,5 +1,4 @@
 # XGripper
-# 0, 0, 0.16, 0.207, 0.676, 0.676, -0.207
 XGripper is a Python package for controlling Xense robotic grippers with integrated Vive Tracker support for spatial tracking.
 
 ## Installation
